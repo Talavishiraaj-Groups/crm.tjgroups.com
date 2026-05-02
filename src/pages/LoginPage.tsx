@@ -67,7 +67,7 @@ export const LoginPage: React.FC = () => {
         <div className="flex flex-col items-center mb-8">
           <img src={logo} alt="TJGROPS" className="h-12 w-auto mb-4" />
           <h1 className="text-2xl font-bold text-[#161616] tracking-tight">TJGROPS CRM</h1>
-          <p className="text-sm text-[#161616]/50 mt-1">Enter your credentials to access the workspace</p>
+          <p className="text-sm text-[#161616]/50 mt-1 text-center">Enter your credentials to access the workspace</p>
         </div>
 
         {loading ? (
