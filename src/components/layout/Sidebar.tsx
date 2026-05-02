@@ -93,8 +93,7 @@ export const Sidebar: React.FC = () => {
         
         {/* Attribution Footer */}
         <div className="mt-4 px-1 text-[9px] text-[#161616]/30 font-medium leading-relaxed">
-          <p>© 2026 <a href="https://www.talavishiraajgroups.com/" target="_blank" rel="noopener noreferrer" className="hover:text-[#161616] transition-colors">Talavishiraaj Groups</a></p>
-          <p>Designed by <a href="https://www.uimitra.com/" target="_blank" rel="noopener noreferrer" className="hover:text-[#161616] transition-colors">Uimitra</a> All rights reserved.</p>
+          <p>© 2026 <a href="https://www.talavishiraajgroups.com/" target="_blank" rel="noopener noreferrer" className="hover:text-[#161616] transition-colors">Talavishiraaj Groups</a>. All rights reserved.</p>
         </div>
       </div>
     </div>
