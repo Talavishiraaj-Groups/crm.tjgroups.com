@@ -1,0 +1,219 @@
+import { 
+  Lead, Deal, Project, AdminRequest, Log, User, Commission, 
+  UserRole, LeadStatus, DealStatus, ProjectStatus 
+} from '../types';
+
+const API_URL = import.meta.env.VITE_API_URL;
+
+async function fetchAPI(action: string, method: 'GET' | 'POST' = 'GET', payload?: any, params: Record<string, string> = {}) {
+  if (!API_URL) throw new Error('VITE_API_URL is missing in .env');
+  
+  const url = new URL(API_URL);
+  url.searchParams.set('action', action);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+
+  if (method === 'GET') {
+    const res = await fetch(url.toString());
+    const json = await res.json();
+    if (json.status !== 'success') throw new Error(json.message);
+    return json.data;
+  } else {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, payload })
+    });
+    const json = await res.json();
+    if (json.status !== 'success') throw new Error(json.message);
+    return json.data;
+  }
+}
+
+export const api = {
+  leads: {
+    getAll: async (role: UserRole, userId: string): Promise<Lead[]> => {
+      const data = await fetchAPI('getLeads');
+      let leads = data.map((r: any) => ({
+        id: r.ID || '', name: r.Name || 'Unknown', email: r.Email || '', phone: r.Phone || '',
+        status: r.Status || 'New', ownerRepId: r.OwnerRepId || '', notes: r.Notes || '',
+        createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
+      })) as Lead[];
+      if (role === 'SALES_REP') leads = leads.filter(l => l.ownerRepId === userId);
+      return leads;
+    },
+    getById: async (id: string): Promise<Lead | undefined> => {
+      const data = await fetchAPI('getLeadById', 'GET', null, { id });
+      if (!data) return undefined;
+      return {
+        id: data.ID || '', name: data.Name || 'Unknown', email: data.Email || '', phone: data.Phone || '',
+        status: data.Status || 'New', ownerRepId: data.OwnerRepId || '', notes: data.Notes || '',
+        createdAt: data.CreatedAt || '', updatedAt: data.UpdatedAt || ''
+      } as Lead;
+    },
+    create: async (payload: Partial<Lead>): Promise<Lead> => {
+      const sheetPayload = {
+        Name: payload.name, Email: payload.email, Phone: payload.phone,
+        Status: payload.status, OwnerRepId: payload.ownerRepId, Notes: payload.notes
+      };
+      const res = await fetchAPI('createLead', 'POST', sheetPayload);
+      return {
+        id: res.ID, name: res.Name, email: res.Email, phone: res.Phone,
+        status: res.Status, ownerRepId: res.OwnerRepId, notes: res.Notes,
+        createdAt: res.CreatedAt, updatedAt: res.UpdatedAt
+      } as Lead;
+    },
+    update: async (id: string, payload: Partial<Lead>): Promise<void> => {
+      const sheetPayload: any = { id };
+      if (payload.status) sheetPayload.Status = payload.status;
+      if (payload.notes) sheetPayload.Notes = payload.notes;
+      if (payload.name) sheetPayload.Name = payload.name;
+      await fetchAPI('updateLead', 'POST', sheetPayload);
+    },
+    convertToDeal: async (leadId: string, userId: string, value: number): Promise<Deal> => {
+      const deal = await api.deals.create({
+        leadId: leadId,
+        ownerRepId: userId,
+        status: 'Open',
+        value: value
+      });
+      await api.leads.update(leadId, { status: 'Closed' });
+      await api.logs.create({
+        entityId: leadId,
+        entityType: 'Lead',
+        action: 'CONVERSION',
+        userId: userId,
+        details: `Lead converted to Deal #${deal.id} with value $${value}`
+      });
+      return deal;
+    }
+  },
+
+  deals: {
+    getAll: async (role: UserRole, userId: string): Promise<Deal[]> => {
+      const data = await fetchAPI('getDeals');
+      let deals = data.map((r: any) => ({
+        id: r.ID || '', leadId: r.LeadId || '', value: Number(r.Value || 0), status: r.Status || 'Open', 
+        ownerRepId: r.OwnerRepId || '', createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
+      })) as Deal[];
+      if (role === 'SALES_REP') deals = deals.filter(d => d.ownerRepId === userId);
+      return deals;
+    },
+    create: async (payload: Partial<Deal>): Promise<Deal> => {
+      const sheetPayload = {
+        LeadId: payload.leadId, Value: payload.value, Status: payload.status, OwnerRepId: payload.ownerRepId
+      };
+      const res = await fetchAPI('createDeal', 'POST', sheetPayload);
+      return { 
+        id: res.ID, leadId: res.LeadId, value: res.Value, status: res.Status, 
+        ownerRepId: res.OwnerRepId, createdAt: res.CreatedAt, updatedAt: res.UpdatedAt 
+      } as Deal;
+    }
+  },
+
+  projects: {
+    getAll: async (role: UserRole, userId: string): Promise<Project[]> => {
+      const data = await fetchAPI('getProjects');
+      let projects = data.map((r: any) => ({
+        id: r.ID || '', clientName: r.ClientName || 'Unknown', status: r.Status || 'Onboarding', ownerRepId: r.OwnerRepId || '',
+        startDate: r.StartDate || '', dueDate: r.DueDate || ''
+      })) as Project[];
+      if (role === 'SALES_REP') projects = projects.filter(p => p.ownerRepId === userId);
+      return projects;
+    },
+    create: async (payload: Partial<Project>): Promise<Project> => {
+      const sheetPayload = {
+        ClientName: payload.clientName, Status: payload.status, OwnerRepId: payload.ownerRepId,
+        StartDate: payload.startDate, DueDate: payload.dueDate
+      };
+      const res = await fetchAPI('createProject', 'POST', sheetPayload);
+      return { id: res.ID, clientName: res.ClientName, status: res.Status, ownerRepId: res.OwnerRepId, startDate: res.StartDate, dueDate: res.DueDate } as Project;
+    }
+  },
+
+  users: {
+    getAll: async (): Promise<User[]> => {
+      const data = await fetchAPI('getUsers');
+      return data.map((row: any) => ({
+        id: String(row.ID || ''), username: String(row.Username || 'Unknown'), password: row.Password ? String(row.Password) : '', role: row.Role || 'SALES_REP', team: row.Team || '', 
+        status: row.Status || 'Inactive', availability: row.Availability || 'Offline',
+        metrics: row.Metrics ? JSON.parse(row.Metrics) : undefined
+      }));
+    },
+    create: async (payload: Partial<User>): Promise<User> => {
+      const sheetPayload = {
+        Username: payload.username, Password: payload.password, Role: payload.role, Team: payload.team, Status: payload.status, Availability: payload.availability
+      };
+      const res = await fetchAPI('createUser', 'POST', sheetPayload);
+      return { id: res.ID, username: res.Username, password: res.Password, role: res.Role, team: res.Team, status: res.Status, availability: res.Availability } as User;
+    },
+    update: async (id: string, payload: Partial<User>): Promise<User> => {
+      const sheetPayload: any = { id };
+      if (payload.status) sheetPayload.Status = payload.status;
+      if (payload.availability) sheetPayload.Availability = payload.availability;
+      if (payload.role) sheetPayload.Role = payload.role;
+      if (payload.username) sheetPayload.Username = payload.username;
+      if (payload.password) sheetPayload.Password = payload.password;
+      if (payload.team) sheetPayload.Team = payload.team;
+      
+      const res = await fetchAPI('updateUser', 'POST', sheetPayload);
+      return { id: res.ID, username: res.Username, password: res.Password, role: res.Role, team: res.Team, status: res.Status, availability: res.Availability } as User;
+    }
+  },
+
+  adminRequests: {
+    getAll: async (): Promise<AdminRequest[]> => {
+      const data = await fetchAPI('getAdminRequests');
+      return data.map((r: any) => ({
+        id: r.ID || '', type: r.Type || 'payment', relatedDealId: r.RelatedDealId || '', requestedBy: r.RequestedBy || '', 
+        status: r.Status || 'Pending', createdAt: r.CreatedAt || '', notes: r.Notes || ''
+      })) as AdminRequest[];
+    },
+    create: async (payload: Partial<AdminRequest>): Promise<AdminRequest> => {
+      const sheetPayload = {
+        Type: payload.type, RelatedDealId: payload.relatedDealId, 
+        RequestedBy: payload.requestedBy, Status: payload.status, Notes: payload.notes
+      };
+      const res = await fetchAPI('createAdminRequest', 'POST', sheetPayload);
+      return { 
+        id: res.ID, type: res.Type, relatedDealId: res.RelatedDealId, 
+        requestedBy: res.RequestedBy, status: res.Status, createdAt: res.CreatedAt, notes: res.Notes
+      } as AdminRequest;
+    },
+    updateStatus: async (id: string, status: string): Promise<void> => {
+      await fetchAPI('updateAdminRequest', 'POST', { id, Status: status });
+    }
+  },
+
+  finance: {
+    getCommissions: async (): Promise<Commission[]> => {
+      const data = await fetchAPI('getCommissions');
+      return data.map((r: any) => ({
+        id: r.ID || '', dealId: r.DealId || '', setterId: r.SetterId || '', setterCommissionAmount: Number(r.SetterAmount || 0),
+        closerId: r.CloserId || '', closerCommissionAmount: Number(r.CloserAmount || 0), payoutStatus: r.PayoutStatus || 'Pending'
+      }));
+    },
+    getKPIs: async () => {
+      return await fetchAPI('getKPIs');
+    },
+    processCommission: async (id: string): Promise<void> => {
+      await fetchAPI('updateCommission', 'POST', { id, PayoutStatus: 'Paid' });
+    }
+  },
+  
+  logs: {
+    getByEntity: async (entityId: string): Promise<Log[]> => {
+      const data = await fetchAPI('getLogs', 'GET', null, { id: entityId });
+      return data.map((r: any) => ({
+        id: r.ID || '', entityId: r.EntityId || '', entityType: r.EntityType || 'Lead',
+        action: r.Action || 'LOG', userId: r.UserId || '', details: r.Details || '', timestamp: r.Timestamp || ''
+      }));
+    },
+    create: async (payload: { entityId: string, entityType: string, action: string, userId: string, details: string }): Promise<void> => {
+      const sheetPayload = {
+        EntityId: payload.entityId, EntityType: payload.entityType,
+        Action: payload.action, UserId: payload.userId, Details: payload.details
+      };
+      await fetchAPI('createLog', 'POST', sheetPayload);
+    }
+  }
+};

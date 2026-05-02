@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#F9F9F9] text-[#161616] antialiased;
+    font-family: 'Roboto', 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  .tj-card {
+    background-color: white;
+    border-radius: 6px;
+    border: 1px solid rgba(22, 22, 22, 0.1);
+  }
+
+  .tj-button-primary {
+    @apply bg-[#161616] text-white px-4 py-2 rounded-[6px] hover:opacity-90 transition-all cursor-pointer;
+  }
+
+  .tj-button-secondary {
+    @apply border border-[#161616] text-[#161616] px-4 py-2 rounded-[6px] hover:bg-[#DFDFDF] transition-all cursor-pointer;
+  }
+
+  .tj-input {
+    @apply border border-[#DFDFDF] rounded-[6px] px-4 py-2 focus:outline-none focus:border-[#161616] transition-all bg-white text-sm;
+  }
+
+  .tj-table-header {
+    @apply text-left px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider;
+  }
+
+  .tj-table-cell {
+    @apply px-4 py-2 text-sm border-b border-[#DFDFDF];
+  }
+}
