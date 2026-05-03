@@ -111,7 +111,7 @@ export const api = {
         ownerRepId: res.OwnerRepId, createdAt: res.CreatedAt, updatedAt: res.UpdatedAt 
       } as Deal;
     },
-    updateStatus: async (dealId: string, status: DealStatus, commissionData?: { setterAmount: number, closerAmount: number }): Promise<void> => {
+    updateStatus: async (dealId: string, status: DealStatus, commissionData?: { setterAmount: number, closerAmount: number, setterId?: string, closerId?: string }): Promise<void> => {
       await fetchAPI('updateDeal', 'POST', { id: dealId, Status: status });
       
       if (status === 'Won') {
@@ -124,13 +124,13 @@ export const api = {
           const lead = leads.find((l: any) => l.ID === leadId);
           
           if (lead) {
-            const setterId = lead.OwnerRepId;
-            const closerId = deal.OwnerRepId;
             const value = Number(deal.Value || 0);
             
-            // Use provided amounts or default if missing
+            // Use provided amounts/IDs or default if missing
             const setterAmount = commissionData?.setterAmount ?? (value * 0.05);
             const closerAmount = commissionData?.closerAmount ?? (value * 0.10);
+            const setterId = commissionData?.setterId || lead.OwnerRepId;
+            const closerId = commissionData?.closerId || deal.OwnerRepId;
             
             await fetchAPI('createCommission', 'POST', {
               DealId: dealId,

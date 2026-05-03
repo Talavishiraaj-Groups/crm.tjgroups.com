@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
-import { Deal, Lead } from '../types';
+import { Deal, Lead, User } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Plus } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
@@ -9,6 +9,7 @@ export const DealsPage: React.FC = () => {
   const { role, user } = useAuth();
   const [deals, setDeals] = useState<Deal[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
   // New Deal Modal
@@ -18,20 +19,27 @@ export const DealsPage: React.FC = () => {
     leadId: '', value: 0
   });
 
-  // Won Modal
+  // Won Modal — SUPER_ADMIN only
   const [showWonModal, setShowWonModal] = useState(false);
   const [selectedDealId, setSelectedDealId] = useState('');
-  const [commissionData, setCommissionData] = useState({ setterAmount: 0, closerAmount: 0 });
+  const [commissionData, setCommissionData] = useState({ 
+    setterAmount: 0, 
+    closerAmount: 0,
+    setterId: '',
+    closerId: ''
+  });
 
   const fetchData = () => {
     if (user && role) {
       setIsLoading(true);
       Promise.all([
         api.deals.getAll(role, user.id),
-        api.leads.getAll(role, user.id)
-      ]).then(([dealsData, leadsData]) => {
+        api.leads.getAll(role, user.id),
+        api.users.getAll()
+      ]).then(([dealsData, leadsData, usersData]) => {
         setDeals(dealsData);
         setLeads(leadsData);
+        setUsers(usersData);
         setIsLoading(false);
       });
     }
@@ -64,14 +72,18 @@ export const DealsPage: React.FC = () => {
   };
   
   const handleUpdateStatus = async (dealId: string, status: 'Won' | 'Lost') => {
+    // Won flow — SUPER_ADMIN only (opens commission modal)
     if (status === 'Won') {
+      if (role !== 'SUPER_ADMIN') return; // safety guard
       const deal = deals.find(d => d.id === dealId);
       if (deal) {
+        const lead = leads.find(l => l.id === deal.leadId);
         setSelectedDealId(dealId);
-        // Default to 5% and 10% as starting point
         setCommissionData({ 
           setterAmount: Math.round(deal.value * 0.05), 
-          closerAmount: Math.round(deal.value * 0.10) 
+          closerAmount: Math.round(deal.value * 0.10),
+          setterId: lead?.ownerRepId || '',
+          closerId: deal.ownerRepId || ''
         });
         setShowWonModal(true);
       }
@@ -90,6 +102,10 @@ export const DealsPage: React.FC = () => {
 
   const handleConfirmWon = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!commissionData.setterId || !commissionData.closerId) {
+      alert('Please select both Setter and Closer');
+      return;
+    }
     setIsSaving(true);
     try {
       await api.deals.updateStatus(selectedDealId, 'Won', commissionData);
@@ -170,12 +186,15 @@ export const DealsPage: React.FC = () => {
                     <td className="px-5 py-3.5 text-right">
                       {deal.status === 'Open' ? (
                         <div className="flex gap-2 justify-end">
-                          <button 
-                            onClick={() => handleUpdateStatus(deal.id, 'Won')}
-                            className="bg-[#161616] text-white px-3 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-all"
-                          >
-                            WON
-                          </button>
+                          {/* WON button — SUPER_ADMIN only. Sets Setter & Closer commission amounts. */}
+                          {role === 'SUPER_ADMIN' && (
+                            <button 
+                              onClick={() => handleUpdateStatus(deal.id, 'Won')}
+                              className="bg-[#161616] text-white px-3 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-all"
+                            >
+                              WON
+                            </button>
+                          )}
                           <button 
                             onClick={() => handleUpdateStatus(deal.id, 'Lost')}
                             className="border border-[#DFDFDF] text-[#161616]/40 px-3 py-1 rounded-[4px] text-[10px] font-bold uppercase tracking-widest hover:border-[#161616]/40 hover:text-[#161616] transition-all"
@@ -235,7 +254,8 @@ export const DealsPage: React.FC = () => {
           </div>
         </div>
       )}
-      {/* Won Deal Modal */}
+
+      {/* Won Deal Modal — SUPER_ADMIN only */}
       {showWonModal && (
         <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-[6px] border border-[#DFDFDF] w-full max-w-[400px] shadow-2xl overflow-hidden">
@@ -248,22 +268,55 @@ export const DealsPage: React.FC = () => {
                 <div className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">Deal Value</div>
                 <div className="text-xl font-bold text-[#161616]">${deals.find(d => d.id === selectedDealId)?.value.toLocaleString()}</div>
               </div>
-              <div>
-                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Setter Commission ($)</label>
-                <input 
-                  type="number" required value={commissionData.setterAmount} 
-                  onChange={e => setCommissionData({...commissionData, setterAmount: Number(e.target.value)})}
-                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
-                />
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Setter</label>
+                  <select 
+                    required value={commissionData.setterId} 
+                    onChange={e => setCommissionData({...commissionData, setterId: e.target.value})}
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                  >
+                    <option value="">Select Setter</option>
+                    {users.map(u => (
+                      <option key={u.id} value={u.id}>{u.username}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Closer</label>
+                  <select 
+                    required value={commissionData.closerId} 
+                    onChange={e => setCommissionData({...commissionData, closerId: e.target.value})}
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                  >
+                    <option value="">Select Closer</option>
+                    {users.map(u => (
+                      <option key={u.id} value={u.id}>{u.username}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <div>
-                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Closer Commission ($)</label>
-                <input 
-                  type="number" required value={commissionData.closerAmount} 
-                  onChange={e => setCommissionData({...commissionData, closerAmount: Number(e.target.value)})}
-                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
-                />
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Setter Commission ($)</label>
+                  <input 
+                    type="number" required value={commissionData.setterAmount} 
+                    onChange={e => setCommissionData({...commissionData, setterAmount: Number(e.target.value)})}
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Closer Commission ($)</label>
+                  <input 
+                    type="number" required value={commissionData.closerAmount} 
+                    onChange={e => setCommissionData({...commissionData, closerAmount: Number(e.target.value)})}
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
+                  />
+                </div>
               </div>
+              
               <div className="flex justify-end gap-2 mt-2">
                 <button type="button" onClick={() => setShowWonModal(false)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
                 <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-5 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50">
