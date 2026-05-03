@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/services';
-import { Lead } from '../types';
+import { Lead, User } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Filter, Download } from 'lucide-react';
+import { Plus, Filter, Download, User as UserIcon } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
 export const LeadsPage: React.FC = () => {
   const { role, user } = useAuth();
   const navigate = useNavigate();
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<string>('All');
@@ -21,18 +22,22 @@ export const LeadsPage: React.FC = () => {
     name: '', email: '', phone: '', linkedin: '', notes: ''
   });
 
-  const fetchLeads = () => {
+  const fetchData = () => {
     if (user) {
       setIsLoading(true);
-      api.leads.getAll(role!, user.id).then((data) => {
-        setLeads(data);
+      Promise.all([
+        api.leads.getAll(role!, user.id),
+        api.users.getAll()
+      ]).then(([leadsData, usersData]) => {
+        setLeads(leadsData);
+        setUsers(usersData);
         setIsLoading(false);
       });
     }
   };
 
   useEffect(() => {
-    fetchLeads();
+    fetchData();
   }, [role, user]);
 
   const handleCreateLead = async (e: React.FormEvent) => {
@@ -47,7 +52,7 @@ export const LeadsPage: React.FC = () => {
       });
       setShowModal(false);
       setFormData({ name: '', email: '', phone: '', linkedin: '', notes: '' });
-      fetchLeads();
+      fetchData();
     } catch (err) {
       console.error(err);
       alert('Failed to create lead');
@@ -56,6 +61,7 @@ export const LeadsPage: React.FC = () => {
     }
   };
 
+  const getUsername = (id: string) => users.find(u => u.id === id)?.username || `ID: ${id}`;
   const statuses = ['All', 'New', 'Contacted', 'Qualified', 'Closed'];
 
   const filtered = leads.filter((l) => {
@@ -115,7 +121,7 @@ export const LeadsPage: React.FC = () => {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-[#DFDFDF]">
-                {['Name', 'Email', 'Phone', 'Status', 'Created', ''].map((h) => (
+                {['Name', 'Setter', 'Contact Info', 'Status', 'Created', ''].map((h) => (
                   <th key={h} className="text-left px-5 py-3 text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest">
                     {h}
                   </th>
@@ -144,14 +150,22 @@ export const LeadsPage: React.FC = () => {
                         <span className="text-sm font-semibold text-[#161616]">{lead.name}</span>
                       </div>
                     </td>
-                    <td className="px-5 py-3.5 text-sm text-[#161616]/60">{lead.email}</td>
-                    <td className="px-5 py-3.5 text-sm text-[#161616]/60">{lead.phone}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-2 text-sm text-[#161616]/60 font-medium">
+                        <UserIcon className="w-3.5 h-3.5 opacity-30" />
+                        {getUsername(lead.ownerRepId)}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <div className="text-sm text-[#161616]/60">{lead.email}</div>
+                      <div className="text-[10px] text-[#161616]/30">{lead.phone}</div>
+                    </td>
                     <td className="px-5 py-3.5">
                       <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${STATUS_BADGE[lead.status]}`}>
                         {lead.status}
                       </span>
                     </td>
-                    <td className="px-5 py-3.5 text-sm text-[#161616]/40">
+                    <td className="px-5 py-3.5 text-[11px] text-[#161616]/40 tabular-nums">
                       {new Date(lead.createdAt).toLocaleDateString()}
                     </td>
                     <td className="px-5 py-3.5 text-right">
