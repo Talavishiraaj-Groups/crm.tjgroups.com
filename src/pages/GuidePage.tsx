@@ -38,6 +38,7 @@ export const GuidePage: React.FC = () => {
                   <p className="mb-3">The Admin module is your control center for managing the CRM's users. Every employee must have an active account to access the system.</p>
                   <ul className="list-disc pl-5 space-y-2">
                     <li><strong>Creating Users:</strong> Click "+ INVITE USER" to add new employees. You must provide a username, assign a role, and set their initial <strong>Password</strong>.</li>
+                    <li><strong>LinkedIn Leads:</strong> When adding new leads, ensure the <strong>LinkedIn Profile</strong> URL is included if available. This allows the team to research the prospect before the first touchpoint.</li>
                     <li><strong>Role Hierarchy:</strong> 
                       <ul className="list-[circle] pl-5 mt-1 space-y-1 text-[#161616]/60">
                         <li><em>Super Admin</em>: Full access (Finance, Admin, approvals).</li>
@@ -54,9 +55,10 @@ export const GuidePage: React.FC = () => {
                   <h4 className="font-bold text-[#161616] text-[15px] mb-3 flex items-center gap-2">
                     2. Financial & Commission Processing (Finance Tab)
                   </h4>
-                  <p className="mb-3">The Finance module automatically calculates commission pools when deals are marked as "Closed Won".</p>
+                  <p className="mb-3">The Finance module automatically calculates commission pools when deals are marked as "Won".</p>
                   <ul className="list-disc pl-5 space-y-2">
-                    <li><strong>Commission Tracking:</strong> The system identifies both the "Setter" (who created the lead) and the "Closer" (who won the deal) and splits the commission accordingly.</li>
+                    <li><strong>Commission Tracking:</strong> The system identifies both the "Setter" (who created the lead) and the "Closer" (who won the deal).</li>
+                    <li><strong>Custom Payouts:</strong> When marking a deal as **WON**, the system will prompt you to enter the specific **Setter Commission** and **Closer Commission** amounts. This ensures flexibility for different deal structures.</li>
                     <li><strong>Processing Payouts:</strong> When it is time to run payroll, click the black <strong>PROCESS</strong> button next to a pending payout. This marks the commission as "Paid" and removes it from the pending liabilities.</li>
                   </ul>
                 </section>
@@ -111,8 +113,9 @@ export const GuidePage: React.FC = () => {
                   </h4>
                   <p className="mb-3">Unlike Sales Reps who only see their own data, you can view the entire company pipeline.</p>
                   <ul className="list-disc pl-5 space-y-2">
-                    <li><strong>Lead Auditing:</strong> Click into any Lead to view the interaction log. If a rep is stuck, use the "+ Add Guidance Note" feature to leave managerial advice directly on the lead record.</li>
-                    <li><strong>Deal Forecasting:</strong> Monitor the Deals board to forecast revenue. Ensure reps are accurately moving deals from Discovery to Negotiation.</li>
+                    <li><strong>Lead Auditing:</strong> Click into any Lead to view the interaction log. Verify if the <strong>LinkedIn Profile</strong> has been added for better prospect qualification.</li>
+                    <li><strong>Deal Oversight:</strong> Monitor the Deals board to forecast revenue. Team Leads can also mark deals as <strong>WON</strong> or <strong>LOST</strong> if they are closing the deal on behalf of a rep.</li>
+                    <li><strong>Commission Verification:</strong> Ensure reps are accurately rewarded. When a deal is won, the system automatically splits the pool between the Setter and Closer.</li>
                   </ul>
                 </section>
 
@@ -161,7 +164,7 @@ export const GuidePage: React.FC = () => {
                   </h4>
                   <p className="mb-3">The Leads tab is where top-of-funnel work happens.</p>
                   <ul className="list-disc pl-5 space-y-2">
-                    <li><strong>Creating Leads:</strong> Click "+ NEW LEAD" to log a new prospect. Fill in their contact info and estimated budget.</li>
+                    <li><strong>Creating Leads:</strong> Click "+ NEW LEAD" to log a new prospect. Fill in their contact info and **LinkedIn Profile**.</li>
                     <li><strong>Logging Interactions:</strong> Click on a Lead's name to open their Detail view. Every time you call, text, or email them, you MUST log it in the "Interaction History". This proves your activity to management.</li>
                     <li><strong>Progressing Status:</strong> As you work the lead, update the status dropdown from <em>New</em> &rarr; <em>Contacted</em> &rarr; <em>Qualified</em>.</li>
                     <li><strong>Converting:</strong> Once a Lead is qualified and ready to discuss terms, click the black <strong>CONVERT TO DEAL</strong> button. This archives the Lead and automatically generates an active Deal in your pipeline.</li>
@@ -174,18 +177,20 @@ export const GuidePage: React.FC = () => {
                   </h4>
                   <p className="mb-3">Deals represent actual revenue opportunities.</p>
                   <ul className="list-disc pl-5 space-y-2">
-                    <li><strong>Pipeline Stages:</strong> Keep your Deals updated. Move them from <em>Discovery</em> to <em>Proposal</em> to <em>Negotiation</em>. Accurate deal stages are required for your commission calculations.</li>
-                    <li><strong>Closing:</strong> When the client agrees, change the status to <strong>Closed Won</strong>. (If they back out, mark it <em>Closed Lost</em>).</li>
+                    <li><strong>Closing:</strong> When a client agrees to terms, navigate to the **Deals** pipeline and click the black **WON** button next to the deal record. This automatically triggers the commission calculation for you and the lead setter.</li>
+                    <li><strong>Lost Deals:</strong> If a client backs out, click the **LOST** button to archive the deal.</li>
                   </ul>
                 </section>
 
                 <section>
                   <h4 className="font-bold text-[#161616] text-[15px] mb-3 flex items-center gap-2">
-                    4. Client Onboarding (Projects Tab)
+                    4. Client Delivery (Projects Tab)
                   </h4>
-                  <p className="mb-3">After winning a deal, a Project is automatically created.</p>
+                  <p className="mb-3">After winning a deal, a Project is created to manage the delivery of the service.</p>
                   <ul className="list-disc pl-5 space-y-2">
-                    <li>Use the Kanban Board or Table View in the <strong>Projects</strong> tab to track the delivery of the service to your client from <em>Onboarding</em> through <em>Completed</em>.</li>
+                    <li><strong>Account Manager (AM):</strong> Assign a person responsible for the day-to-day delivery and client success.</li>
+                    <li><strong>Sales Liaison:</strong> Assign a bridge person who maintains the connection between the client and the sales team to ensure alignment.</li>
+                    <li><strong>Tracking:</strong> Use the Kanban Board to monitor progress from *Onboarding* to *Completed*.</li>
                   </ul>
                 </section>
 

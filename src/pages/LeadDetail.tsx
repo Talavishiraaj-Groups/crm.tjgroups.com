@@ -213,6 +213,14 @@ export const LeadDetail: React.FC = () => {
                 <Calendar className="w-4 h-4 text-[#161616]/20 shrink-0" />
                 <span className="text-sm text-[#161616]/60">Created {new Date(lead.createdAt).toLocaleDateString()}</span>
               </div>
+              {lead.linkedin && (
+                <div className="flex items-center gap-3">
+                  <span className="w-4 h-4 text-[#161616]/20 shrink-0 flex items-center justify-center font-bold text-[10px]">in</span>
+                  <a href={lead.linkedin} target="_blank" rel="noopener noreferrer" className="text-sm text-[#161616]/60 hover:text-[#161616] hover:underline truncate">
+                    LinkedIn Profile
+                  </a>
+                </div>
+              )}
             </div>
           </div>
 

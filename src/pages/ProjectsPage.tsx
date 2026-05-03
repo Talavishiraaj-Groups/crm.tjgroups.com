@@ -22,6 +22,7 @@ export const ProjectsPage: React.FC = () => {
   const { role, user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
+  const [usersList, setUsers] = useState<any[]>([]);
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
   const [isLoading, setIsLoading] = useState(true);
 
@@ -29,7 +30,11 @@ export const ProjectsPage: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
-    clientName: '', dueDate: '', startDate: new Date().toISOString().split('T')[0]
+    clientName: '', 
+    dueDate: '', 
+    startDate: new Date().toISOString().split('T')[0],
+    accountManagerId: '',
+    liaisonId: ''
   });
 
   const fetchData = () => {
@@ -37,10 +42,12 @@ export const ProjectsPage: React.FC = () => {
       setIsLoading(true);
       Promise.all([
         api.projects.getAll(role, user.id),
-        api.deals.getAll(role, user.id)
-      ]).then(([pData, dData]) => {
+        api.deals.getAll(role, user.id),
+        api.users.getAll()
+      ]).then(([pData, dData, uData]) => {
         setProjects(pData);
-        setDeals(dData.filter(d => d.status === 'Won')); // Only Won deals can be projects
+        setDeals(dData.filter(d => d.status === 'Won'));
+        setUsers(uData);
         setIsLoading(false);
       });
     }
@@ -60,10 +67,18 @@ export const ProjectsPage: React.FC = () => {
         status: 'Onboarding',
         ownerRepId: user.id,
         startDate: formData.startDate,
-        dueDate: formData.dueDate
+        dueDate: formData.dueDate,
+        accountManagerId: formData.accountManagerId,
+        liaisonId: formData.liaisonId
       });
       setShowModal(false);
-      setFormData({ clientName: '', dueDate: '', startDate: new Date().toISOString().split('T')[0] });
+      setFormData({ 
+        clientName: '', 
+        dueDate: '', 
+        startDate: new Date().toISOString().split('T')[0],
+        accountManagerId: '',
+        liaisonId: ''
+      });
       fetchData();
     } catch (err) {
       console.error(err);
@@ -121,6 +136,28 @@ export const ProjectsPage: React.FC = () => {
                   className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
                   placeholder="e.g. Acme Corp Migration"
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Account Manager</label>
+                  <select 
+                    value={formData.accountManagerId} onChange={e => setFormData({...formData, accountManagerId: e.target.value})}
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                  >
+                    <option value="">— Unassigned —</option>
+                    {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Sales Liaison</label>
+                  <select 
+                    value={formData.liaisonId} onChange={e => setFormData({...formData, liaisonId: e.target.value})}
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                  >
+                    <option value="">— Unassigned —</option>
+                    {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                  </select>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -185,9 +222,13 @@ export const ProjectsPage: React.FC = () => {
                           <Calendar className="w-3 h-3" />
                           Due {new Date(project.dueDate).toLocaleDateString()}
                         </div>
-                        <div className="flex items-center gap-2 text-[11px] text-[#161616]/40 mb-4">
+                        <div className="flex items-center gap-2 text-[11px] text-[#161616]/40 mb-1">
                           <User className="w-3 h-3" />
-                          Rep #{project.ownerRepId.split('_')[1]}
+                          AM: {usersList.find(u => u.id === project.accountManagerId)?.username || 'Unassigned'}
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px] text-[#161616]/40 mb-4">
+                          <User className="w-3 h-3 text-blue-500" />
+                          Liaison: {usersList.find(u => u.id === project.liaisonId)?.username || 'Unassigned'}
                         </div>
                         {/* Progress bar — monochromatic */}
                         <div className="w-full h-1 bg-[#DFDFDF] rounded-full">
@@ -210,7 +251,7 @@ export const ProjectsPage: React.FC = () => {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-[#DFDFDF]">
-                {['Client', 'Status', 'Owner', 'Start Date', 'Due Date', 'Progress'].map((h) => (
+                {['Client', 'Status', 'Account Manager', 'Liaison', 'Start Date', 'Due Date', 'Progress'].map((h) => (
                   <th key={h} className="text-left px-5 py-3 text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
@@ -229,7 +270,12 @@ export const ProjectsPage: React.FC = () => {
                           {project.status === 'InProgress' ? 'In Progress' : project.status}
                         </span>
                       </td>
-                      <td className="px-5 py-3.5 text-sm text-[#161616]/40">Rep #{project.ownerRepId.split('_')[1]}</td>
+                      <td className="px-5 py-3.5 text-sm text-[#161616]/40">
+                        {usersList.find(u => u.id === project.accountManagerId)?.username || '-'}
+                      </td>
+                      <td className="px-5 py-3.5 text-sm text-[#161616]/40">
+                        {usersList.find(u => u.id === project.liaisonId)?.username || '-'}
+                      </td>
                       <td className="px-5 py-3.5 text-sm text-[#161616]/40">{new Date(project.startDate).toLocaleDateString()}</td>
                       <td className="px-5 py-3.5 text-sm text-[#161616]/40">{new Date(project.dueDate).toLocaleDateString()}</td>
                       <td className="px-5 py-3.5">

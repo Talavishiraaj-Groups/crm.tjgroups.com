@@ -35,6 +35,7 @@ export const api = {
       const data = await fetchAPI('getLeads');
       let leads = data.map((r: any) => ({
         id: r.ID || '', name: r.Name || 'Unknown', email: r.Email || '', phone: r.Phone || '',
+        linkedin: r.Linkedin || '',
         status: r.Status || 'New', ownerRepId: r.OwnerRepId || '', notes: r.Notes || '',
         createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
       })) as Lead[];
@@ -46,18 +47,19 @@ export const api = {
       if (!data) return undefined;
       return {
         id: data.ID || '', name: data.Name || 'Unknown', email: data.Email || '', phone: data.Phone || '',
+        linkedin: data.Linkedin || '',
         status: data.Status || 'New', ownerRepId: data.OwnerRepId || '', notes: data.Notes || '',
         createdAt: data.CreatedAt || '', updatedAt: data.UpdatedAt || ''
       } as Lead;
     },
     create: async (payload: Partial<Lead>): Promise<Lead> => {
       const sheetPayload = {
-        Name: payload.name, Email: payload.email, Phone: payload.phone,
+        Name: payload.name, Email: payload.email, Phone: payload.phone, Linkedin: payload.linkedin,
         Status: payload.status, OwnerRepId: payload.ownerRepId, Notes: payload.notes
       };
       const res = await fetchAPI('createLead', 'POST', sheetPayload);
       return {
-        id: res.ID, name: res.Name, email: res.Email, phone: res.Phone,
+        id: res.ID, name: res.Name, email: res.Email, phone: res.Phone, linkedin: res.Linkedin,
         status: res.Status, ownerRepId: res.OwnerRepId, notes: res.Notes,
         createdAt: res.CreatedAt, updatedAt: res.UpdatedAt
       } as Lead;
@@ -67,6 +69,7 @@ export const api = {
       if (payload.status) sheetPayload.Status = payload.status;
       if (payload.notes) sheetPayload.Notes = payload.notes;
       if (payload.name) sheetPayload.Name = payload.name;
+      if (payload.linkedin) sheetPayload.Linkedin = payload.linkedin;
       await fetchAPI('updateLead', 'POST', sheetPayload);
     },
     convertToDeal: async (leadId: string, userId: string, value: number): Promise<Deal> => {
@@ -107,6 +110,47 @@ export const api = {
         id: res.ID, leadId: res.LeadId, value: res.Value, status: res.Status, 
         ownerRepId: res.OwnerRepId, createdAt: res.CreatedAt, updatedAt: res.UpdatedAt 
       } as Deal;
+    },
+    updateStatus: async (dealId: string, status: DealStatus, commissionData?: { setterAmount: number, closerAmount: number }): Promise<void> => {
+      await fetchAPI('updateDeal', 'POST', { id: dealId, Status: status });
+      
+      if (status === 'Won') {
+        // Trigger Commission Calculation
+        const deals = await fetchAPI('getDeals');
+        const deal = deals.find((d: any) => d.ID === dealId);
+        if (deal) {
+          const leadId = deal.LeadId;
+          const leads = await fetchAPI('getLeads');
+          const lead = leads.find((l: any) => l.ID === leadId);
+          
+          if (lead) {
+            const setterId = lead.OwnerRepId;
+            const closerId = deal.OwnerRepId;
+            const value = Number(deal.Value || 0);
+            
+            // Use provided amounts or default if missing
+            const setterAmount = commissionData?.setterAmount ?? (value * 0.05);
+            const closerAmount = commissionData?.closerAmount ?? (value * 0.10);
+            
+            await fetchAPI('createCommission', 'POST', {
+              DealId: dealId,
+              SetterId: setterId,
+              CloserId: closerId,
+              SetterAmount: setterAmount,
+              CloserAmount: closerAmount,
+              PayoutStatus: 'Pending'
+            });
+            
+            await api.logs.create({
+              entityId: dealId,
+              entityType: 'Deal',
+              action: 'COMMISSION_GENERATED',
+              userId: 'SYSTEM',
+              details: `Commissions generated: Setter ($${setterAmount}), Closer ($${closerAmount})`
+            });
+          }
+        }
+      }
     }
   },
 
@@ -115,6 +159,7 @@ export const api = {
       const data = await fetchAPI('getProjects');
       let projects = data.map((r: any) => ({
         id: r.ID || '', clientName: r.ClientName || 'Unknown', status: r.Status || 'Onboarding', ownerRepId: r.OwnerRepId || '',
+        accountManagerId: r.AccountManagerId || '', liaisonId: r.LiaisonId || '',
         startDate: r.StartDate || '', dueDate: r.DueDate || ''
       })) as Project[];
       if (role === 'SALES_REP') projects = projects.filter(p => p.ownerRepId === userId);
@@ -123,10 +168,25 @@ export const api = {
     create: async (payload: Partial<Project>): Promise<Project> => {
       const sheetPayload = {
         ClientName: payload.clientName, Status: payload.status, OwnerRepId: payload.ownerRepId,
+        AccountManagerId: payload.accountManagerId, LiaisonId: payload.liaisonId,
         StartDate: payload.startDate, DueDate: payload.dueDate
       };
       const res = await fetchAPI('createProject', 'POST', sheetPayload);
-      return { id: res.ID, clientName: res.ClientName, status: res.Status, ownerRepId: res.OwnerRepId, startDate: res.StartDate, dueDate: res.DueDate } as Project;
+      return { 
+        id: res.ID, clientName: res.ClientName, status: res.Status, ownerRepId: res.OwnerRepId, 
+        accountManagerId: res.AccountManagerId, liaisonId: res.LiaisonId,
+        startDate: res.StartDate, dueDate: res.DueDate 
+      } as Project;
+    },
+    update: async (id: string, payload: Partial<Project>): Promise<void> => {
+      const sheetPayload = {
+        id,
+        Status: payload.status,
+        AccountManagerId: payload.accountManagerId,
+        LiaisonId: payload.liaisonId,
+        Notes: payload.notes
+      };
+      await fetchAPI('updateProject', 'POST', sheetPayload);
     }
   },
 

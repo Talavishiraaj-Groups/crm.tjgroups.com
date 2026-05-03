@@ -12,9 +12,9 @@ const MAIN_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('MAIN
 // Define the core tables and their headers
 const DATABASE_SCHEMA = {
   'Users': ['ID', 'Username', 'Role', 'Team', 'Status', 'Availability', 'CreatedAt', 'UpdatedAt'],
-  'Leads': ['ID', 'Name', 'Email', 'Phone', 'Status', 'OwnerRepId', 'Notes', 'CreatedAt', 'UpdatedAt'],
+  'Leads': ['ID', 'Name', 'Email', 'Phone', 'Status', 'OwnerRepId', 'Notes', 'Linkedin', 'CreatedAt', 'UpdatedAt'],
   'Deals': ['ID', 'LeadId', 'Value', 'Status', 'OwnerRepId', 'CreatedAt', 'UpdatedAt'],
-  'Projects': ['ID', 'ClientName', 'Status', 'OwnerRepId', 'StartDate', 'DueDate', 'CreatedAt', 'UpdatedAt'],
+  'Projects': ['ID', 'ClientName', 'Status', 'OwnerRepId', 'AccountManagerId', 'LiaisonId', 'StartDate', 'DueDate', 'CreatedAt', 'UpdatedAt'],
   'AdminRequests': ['ID', 'Type', 'RelatedDealId', 'RequestedBy', 'Status', 'CreatedAt', 'UpdatedAt'],
   'Commissions': ['ID', 'DealId', 'SetterId', 'SetterAmount', 'CloserId', 'CloserAmount', 'PayoutStatus', 'CreatedAt', 'UpdatedAt'],
   'Logs': ['ID', 'EntityId', 'EntityType', 'Action', 'UserId', 'Details', 'Timestamp']

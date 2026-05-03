@@ -85,14 +85,17 @@ function updateRecord(sheetName, id, payload) {
 function getFinancialKPIs() {
   const deals = getRecords('Deals');
   const commissions = getRecords('Commissions');
-  const requests = getRecords('AdminRequests');
   
-  const totalValue = deals.reduce((sum, deal) => sum + Number(deal.Value || 0), 0);
+  const totalValue = deals.filter(d => d.Status === 'Won').reduce((sum, deal) => sum + Number(deal.Value || 0), 0);
   const totalCommissions = commissions.reduce((sum, comm) => sum + Number(comm.SetterAmount || 0) + Number(comm.CloserAmount || 0), 0);
   
-  const paymentRequests = requests.filter(r => r.Type === 'payment');
-  const payoutsPending = paymentRequests.filter(r => r.Status === 'Pending').length * 1000; // Placeholder logic
-  const payoutsPaid = paymentRequests.filter(r => r.Status === 'Approved').length * 1000; // Placeholder logic
+  const payoutsPending = commissions
+    .filter(c => c.PayoutStatus === 'Pending')
+    .reduce((sum, c) => sum + Number(c.SetterAmount || 0) + Number(c.CloserAmount || 0), 0);
+    
+  const payoutsPaid = commissions
+    .filter(c => c.PayoutStatus === 'Paid')
+    .reduce((sum, c) => sum + Number(c.SetterAmount || 0) + Number(c.CloserAmount || 0), 0);
   
   return {
     totalValue,

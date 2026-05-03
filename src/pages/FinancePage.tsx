@@ -101,9 +101,10 @@ export const FinancePage: React.FC = () => {
                     {c.payoutStatus !== 'Paid' && (
                       <button 
                         onClick={() => handleProcess(c.id)}
-                        className="text-[10px] font-bold text-white bg-[#161616] px-3 py-1 rounded-[4px] hover:opacity-80 transition-all"
+                        disabled={isLoading}
+                        className="text-[10px] font-bold text-white bg-[#161616] px-3 py-1 rounded-[4px] hover:opacity-80 transition-all disabled:opacity-50"
                       >
-                        PROCESS
+                        {isLoading ? '...' : 'PROCESS'}
                       </button>
                     )}
                   </td>

@@ -18,6 +18,11 @@ export const DealsPage: React.FC = () => {
     leadId: '', value: 0
   });
 
+  // Won Modal
+  const [showWonModal, setShowWonModal] = useState(false);
+  const [selectedDealId, setSelectedDealId] = useState('');
+  const [commissionData, setCommissionData] = useState({ setterAmount: 0, closerAmount: 0 });
+
   const fetchData = () => {
     if (user && role) {
       setIsLoading(true);
@@ -53,6 +58,46 @@ export const DealsPage: React.FC = () => {
     } catch (err) {
       console.error(err);
       alert('Failed to create deal');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+  
+  const handleUpdateStatus = async (dealId: string, status: 'Won' | 'Lost') => {
+    if (status === 'Won') {
+      const deal = deals.find(d => d.id === dealId);
+      if (deal) {
+        setSelectedDealId(dealId);
+        // Default to 5% and 10% as starting point
+        setCommissionData({ 
+          setterAmount: Math.round(deal.value * 0.05), 
+          closerAmount: Math.round(deal.value * 0.10) 
+        });
+        setShowWonModal(true);
+      }
+      return;
+    }
+
+    if (!window.confirm(`Mark this deal as ${status.toUpperCase()}?`)) return;
+    try {
+      await api.deals.updateStatus(dealId, status);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to update status');
+    }
+  };
+
+  const handleConfirmWon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSaving(true);
+    try {
+      await api.deals.updateStatus(selectedDealId, 'Won', commissionData);
+      setShowWonModal(false);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to update status');
     } finally {
       setIsSaving(false);
     }
@@ -102,7 +147,7 @@ export const DealsPage: React.FC = () => {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-[#DFDFDF]">
-                {['Deal ID', 'Client', 'Value', 'Status', 'Owner', 'Created'].map((h) => (
+                {['Deal ID', 'Client', 'Value', 'Status', 'Owner', 'Actions'].map((h) => (
                   <th key={h} className="text-left px-5 py-3 text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
@@ -122,7 +167,28 @@ export const DealsPage: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-5 py-3.5 text-sm text-[#161616]/40">{deal.ownerRepId}</td>
-                    <td className="px-5 py-3.5 text-sm text-[#161616]/40">{deal.createdAt ? new Date(deal.createdAt).toLocaleDateString() : 'N/A'}</td>
+                    <td className="px-5 py-3.5 text-right">
+                      {deal.status === 'Open' ? (
+                        <div className="flex gap-2 justify-end">
+                          <button 
+                            onClick={() => handleUpdateStatus(deal.id, 'Won')}
+                            className="bg-[#161616] text-white px-3 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-all"
+                          >
+                            WON
+                          </button>
+                          <button 
+                            onClick={() => handleUpdateStatus(deal.id, 'Lost')}
+                            className="border border-[#DFDFDF] text-[#161616]/40 px-3 py-1 rounded-[4px] text-[10px] font-bold uppercase tracking-widest hover:border-[#161616]/40 hover:text-[#161616] transition-all"
+                          >
+                            LOST
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-[#161616]/20 font-mono uppercase tracking-tighter">
+                          {deal.createdAt ? new Date(deal.createdAt).toLocaleDateString() : 'N/A'}
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 ))
               )}
@@ -163,6 +229,45 @@ export const DealsPage: React.FC = () => {
                 <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
                 <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-5 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50">
                   {isSaving ? 'SAVING...' : 'CREATE DEAL'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Won Deal Modal */}
+      {showWonModal && (
+        <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-[6px] border border-[#DFDFDF] w-full max-w-[400px] shadow-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-[#DFDFDF] flex justify-between items-center">
+              <h3 className="text-sm font-bold text-[#161616] uppercase tracking-widest">Mark Deal as Won</h3>
+              <button onClick={() => setShowWonModal(false)} className="text-[#161616]/30 hover:text-[#161616]">✕</button>
+            </div>
+            <form onSubmit={handleConfirmWon} className="p-6 flex flex-col gap-4">
+              <div className="bg-[#F9F9F9] p-4 rounded-[4px] border border-[#DFDFDF] mb-2">
+                <div className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">Deal Value</div>
+                <div className="text-xl font-bold text-[#161616]">${deals.find(d => d.id === selectedDealId)?.value.toLocaleString()}</div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Setter Commission ($)</label>
+                <input 
+                  type="number" required value={commissionData.setterAmount} 
+                  onChange={e => setCommissionData({...commissionData, setterAmount: Number(e.target.value)})}
+                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Closer Commission ($)</label>
+                <input 
+                  type="number" required value={commissionData.closerAmount} 
+                  onChange={e => setCommissionData({...commissionData, closerAmount: Number(e.target.value)})}
+                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
+                />
+              </div>
+              <div className="flex justify-end gap-2 mt-2">
+                <button type="button" onClick={() => setShowWonModal(false)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
+                <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-5 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50">
+                  {isSaving ? 'PROCESS...' : 'CONFIRM WIN'}
                 </button>
               </div>
             </form>

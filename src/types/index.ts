@@ -22,6 +22,7 @@ export interface Lead {
   name: string;
   email: string;
   phone: string;
+  linkedin?: string;
   assignedSetter?: string;
   assignedCloser?: string;
   status: LeadStatus;
@@ -69,6 +70,8 @@ export interface Project {
   clientName: string;
   status: ProjectStatus;
   ownerRepId: string;
+  accountManagerId?: string; // Delivery contact
+  liaisonId?: string; // Liaison between client and sales
   startDate: string;
   dueDate: string;
   notes?: string;

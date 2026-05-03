@@ -18,7 +18,7 @@ export const LeadsPage: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
-    name: '', email: '', phone: '', notes: ''
+    name: '', email: '', phone: '', linkedin: '', notes: ''
   });
 
   const fetchLeads = () => {
@@ -46,7 +46,7 @@ export const LeadsPage: React.FC = () => {
         ownerRepId: user.id
       });
       setShowModal(false);
-      setFormData({ name: '', email: '', phone: '', notes: '' });
+      setFormData({ name: '', email: '', phone: '', linkedin: '', notes: '' });
       fetchLeads();
     } catch (err) {
       console.error(err);
@@ -199,6 +199,14 @@ export const LeadsPage: React.FC = () => {
                     className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
                   />
                 </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">LinkedIn Profile (Optional)</label>
+                <input 
+                  type="url" value={formData.linkedin} onChange={e => setFormData({...formData, linkedin: e.target.value})}
+                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
+                  placeholder="https://linkedin.com/in/..."
+                />
               </div>
               <div>
                 <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Initial Notes</label>
