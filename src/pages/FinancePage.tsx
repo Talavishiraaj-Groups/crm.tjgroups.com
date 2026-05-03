@@ -1,19 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
-import { Commission } from '../types';
-import { Download, TrendingUp } from 'lucide-react';
+import { Commission, User } from '../types';
+import { TrendingUp, CheckCircle2, Clock } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
 export const FinancePage: React.FC = () => {
   const [commissions, setCommissions] = useState<Commission[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [kpis, setKpis] = useState<{ totalValue: number; totalCommissions: number; payoutsPending: number; payoutsPaid: number } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchFinanceData = () => {
     setIsLoading(true);
-    Promise.all([api.finance.getCommissions(), api.finance.getKPIs()]).then(([comm, kpi]) => {
+    Promise.all([
+      api.finance.getCommissions(), 
+      api.finance.getKPIs(),
+      api.users.getAll()
+    ]).then(([comm, kpi, usersData]) => {
       setCommissions(comm);
       setKpis(kpi);
+      setUsers(usersData);
       setIsLoading(false);
     });
   };
@@ -33,15 +39,17 @@ export const FinancePage: React.FC = () => {
     }
   };
 
-  if (isLoading) {
+  const getUsername = (id: string) => users.find(u => u.id === id)?.username || `ID: ${id}`;
+
+  if (isLoading || !kpis) {
     return <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-12 text-center text-[#161616]/30 italic text-sm">Loading financial data...</div>;
   }
 
   const kpiList = [
-    { label: 'Total Deal Value', value: `$${kpis!.totalValue.toLocaleString()}`, sub: '+12% vs last quarter', invert: false },
-    { label: 'Total Commissions', value: `$${kpis!.totalCommissions.toLocaleString()}`, sub: '+8% vs last quarter', invert: false },
-    { label: 'Payouts Pending', value: `$${kpis!.payoutsPending.toLocaleString()}`, sub: 'Requires processing', invert: false },
-    { label: 'Payouts Paid', value: `$${kpis!.payoutsPaid.toLocaleString()}`, sub: '+22% YTD', invert: true },
+    { label: 'Total Deal Value', value: `$${kpis.totalValue.toLocaleString()}`, sub: 'Settled revenue', invert: false },
+    { label: 'Total Commissions', value: `$${kpis.totalCommissions.toLocaleString()}`, sub: 'Across all reps', invert: false },
+    { label: 'Payouts Pending', value: `$${kpis.payoutsPending.toLocaleString()}`, sub: 'Awaiting approval', invert: false },
+    { label: 'Payouts Paid', value: `$${kpis.payoutsPaid.toLocaleString()}`, sub: 'Successfully settled', invert: true },
   ];
 
   return (
@@ -53,7 +61,6 @@ export const FinancePage: React.FC = () => {
         </div>
       </div>
 
-      {/* KPI row — last card inverted */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {kpiList.map(({ label, value, sub, invert }) => (
           <div key={label} className={`rounded-[6px] p-5 border ${invert ? 'bg-[#161616] border-[#161616]' : 'bg-white border-[#DFDFDF]'}`}>
@@ -67,7 +74,6 @@ export const FinancePage: React.FC = () => {
         ))}
       </div>
 
-      {/* Commission Ledger */}
       <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden">
         <div className="flex justify-between items-center px-5 py-4 border-b border-[#DFDFDF]">
           <h3 className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest">Commission Ledger</h3>
@@ -76,7 +82,7 @@ export const FinancePage: React.FC = () => {
         <table className="w-full border-collapse">
           <thead>
             <tr className="border-b border-[#DFDFDF]">
-              {['Deal ID', 'Setter', 'Setter Payout', 'Closer', 'Closer Payout', 'Status', 'Action'].map((h) => (
+              {['Deal ID', 'Setter', 'Amount', 'Closer', 'Amount', 'Status', 'Action'].map((h) => (
                 <th key={h} className="text-left px-5 py-3 text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest">{h}</th>
               ))}
             </tr>
@@ -87,13 +93,14 @@ export const FinancePage: React.FC = () => {
             ) : (
               commissions.map((c) => (
                 <tr key={c.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
-                  <td className="px-5 py-3.5 text-xs font-mono text-[#161616]/40">#{c.dealId}</td>
-                  <td className="px-5 py-3.5 text-sm text-[#161616]/60">Rep {c.setterId}</td>
+                  <td className="px-5 py-3.5 text-xs font-mono text-[#161616]/40">#{c.dealId.split('-')[0]}</td>
+                  <td className="px-5 py-3.5 text-sm text-[#161616]/60 font-medium">{getUsername(c.setterId)}</td>
                   <td className="px-5 py-3.5 text-sm font-bold text-[#161616] tabular-nums">${c.setterCommissionAmount.toLocaleString()}</td>
-                  <td className="px-5 py-3.5 text-sm text-[#161616]/60">Rep {c.closerId}</td>
+                  <td className="px-5 py-3.5 text-sm text-[#161616]/60 font-medium">{getUsername(c.closerId)}</td>
                   <td className="px-5 py-3.5 text-sm font-bold text-[#161616] tabular-nums">${c.closerCommissionAmount.toLocaleString()}</td>
                   <td className="px-5 py-3.5">
-                    <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${STATUS_BADGE[c.payoutStatus]}`}>
+                    <span className={`flex items-center gap-1.5 px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider w-fit ${STATUS_BADGE[c.payoutStatus]}`}>
+                      {c.payoutStatus === 'Paid' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
                       {c.payoutStatus}
                     </span>
                   </td>
@@ -101,10 +108,9 @@ export const FinancePage: React.FC = () => {
                     {c.payoutStatus !== 'Paid' && (
                       <button 
                         onClick={() => handleProcess(c.id)}
-                        disabled={isLoading}
-                        className="text-[10px] font-bold text-white bg-[#161616] px-3 py-1 rounded-[4px] hover:opacity-80 transition-all disabled:opacity-50"
+                        className="text-[10px] font-bold text-white bg-[#161616] px-3 py-1 rounded-[4px] hover:opacity-80 transition-all"
                       >
-                        {isLoading ? '...' : 'PROCESS'}
+                        SETTLE
                       </button>
                     )}
                   </td>

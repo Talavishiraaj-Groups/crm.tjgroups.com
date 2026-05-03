@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AdminRequest } from '../types';
 import { api } from '../api/services';
-import { FileText, DollarSign, Plus } from 'lucide-react';
+import { FileText, DollarSign, Plus, Link as LinkIcon, ExternalLink } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { STATUS_BADGE } from '../utils/badges';
 
@@ -20,6 +20,9 @@ export const PaymentsPage: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [viewRequest, setViewRequest] = useState<AdminRequest | null>(null);
+  
+  // Approval state
+  const [approvalLink, setApprovalLink] = useState('');
   const [formData, setFormData] = useState({
     type: 'payment' as 'payment' | 'paperwork', relatedDealId: '', notes: ''
   });
@@ -59,23 +62,35 @@ export const PaymentsPage: React.FC = () => {
     }
   };
 
-  const handleApprove = async (id: string) => {
-    if (!window.confirm('Are you sure you want to approve this request?')) return;
+  const handleApprove = async (id: string, type: string) => {
+    if (!approvalLink && type === 'payment') {
+      alert('Please provide a payment link');
+      return;
+    }
+    
+    setIsSaving(true);
     try {
-      await api.adminRequests.updateStatus(id, 'Approved');
+      const updateData: any = { status: 'Approved' };
+      if (type === 'payment') updateData.paymentLink = approvalLink;
+      else updateData.documentUrl = approvalLink;
+
+      await api.adminRequests.update(id, updateData);
+      setApprovalLink('');
+      setViewRequest(null);
       fetchRequests();
     } catch (err) {
       console.error(err);
       alert('Failed to approve request');
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const filtered = tab === 'all' ? requests : requests.filter((r) => r.type === tab);
-
   const pendingCount = requests.filter((r) => r.status === 'Pending').length;
   const transitVolume = requests
     .filter(r => r.type === 'payment' && r.status === 'Pending')
-    .length * 1500; // Placeholder volume calculation
+    .length * 1500;
   const approvedDocs = requests.filter(r => r.type === 'paperwork' && r.status === 'Approved').length;
 
   return (
@@ -93,26 +108,21 @@ export const PaymentsPage: React.FC = () => {
         </button>
       </div>
 
-      {/* KPI row — monochromatic */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5">
           <div className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest mb-2">Pending Approvals</div>
           <div className="text-2xl font-bold text-[#161616] tabular-nums">{pendingCount}</div>
-          {pendingCount > 0 && <div className="text-[10px] font-bold text-[#161616]/40 mt-2">Awaiting review</div>}
         </div>
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5">
           <div className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest mb-2">Volume in Transit</div>
           <div className="text-2xl font-bold text-[#161616] tabular-nums">${transitVolume.toLocaleString()}</div>
-          <div className="text-[10px] font-bold text-[#161616]/40 mt-2">Estimated across {requests.length} requests</div>
         </div>
         <div className="bg-[#161616] rounded-[6px] p-5">
           <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Documents Approved</div>
           <div className="text-2xl font-bold text-white tabular-nums">{approvedDocs}</div>
-          <div className="text-[10px] font-bold text-white/30 mt-2">Total approved</div>
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="flex gap-1 bg-[#F9F9F9] border border-[#DFDFDF] p-1 rounded-[6px] w-fit">
         {(['all', 'payment', 'paperwork'] as const).map((t) => (
           <button
@@ -127,7 +137,6 @@ export const PaymentsPage: React.FC = () => {
         ))}
       </div>
 
-      {/* Table */}
       {isLoading ? (
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-12 text-center text-[#161616]/30 italic text-sm">Loading requests...</div>
       ) : (
@@ -135,7 +144,7 @@ export const PaymentsPage: React.FC = () => {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-[#DFDFDF]">
-                {['Type', 'Related ID', 'Requested By', 'Status', 'Date', 'Actions'].map((h) => (
+                {['Type', 'Related ID', 'Requested By', 'Status', 'Link', 'Actions'].map((h) => (
                   <th key={h} className="text-left px-5 py-3 text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
@@ -146,6 +155,7 @@ export const PaymentsPage: React.FC = () => {
               ) : (
                 filtered.map((req) => {
                   const conf = TYPE_CONFIG[req.type] || TYPE_CONFIG['payment'];
+                  const link = req.paymentLink || req.documentUrl;
                   return (
                     <tr key={req.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
                       <td className="px-5 py-3.5">
@@ -161,24 +171,22 @@ export const PaymentsPage: React.FC = () => {
                           {req.status}
                         </span>
                       </td>
-                      <td className="px-5 py-3.5 text-sm text-[#161616]/40">{req.createdAt ? new Date(req.createdAt).toLocaleDateString() : 'N/A'}</td>
                       <td className="px-5 py-3.5">
-                        <div className="flex gap-2">
-                          {(role === 'SUPER_ADMIN' || role === 'ADMIN') && req.status === 'Pending' && (
-                            <button 
-                              onClick={() => handleApprove(req.id)}
-                              className="text-[10px] font-bold text-white bg-[#161616] px-2 py-1 rounded-[4px] hover:opacity-80 transition-all"
-                            >
-                              APPROVE
-                            </button>
-                          )}
-                          <button 
-                            onClick={() => setViewRequest(req)}
-                            className="text-[10px] font-bold text-[#161616]/50 border border-[#DFDFDF] px-2 py-1 rounded-[4px] hover:border-[#161616]/30 hover:text-[#161616] transition-all"
-                          >
-                            VIEW
-                          </button>
-                        </div>
+                        {link ? (
+                          <a href={link} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[#161616] hover:underline text-[10px] font-bold uppercase">
+                            <ExternalLink className="w-3 h-3" /> OPEN LINK
+                          </a>
+                        ) : (
+                          <span className="text-[10px] text-[#161616]/20 font-mono italic">—</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <button 
+                          onClick={() => setViewRequest(req)}
+                          className="text-[10px] font-bold text-[#161616]/50 border border-[#DFDFDF] px-2 py-1 rounded-[4px] hover:border-[#161616]/30 hover:text-[#161616] transition-all"
+                        >
+                          {req.status === 'Pending' && (role === 'SUPER_ADMIN' || role === 'ADMIN') ? 'APPROVE' : 'VIEW'}
+                        </button>
                       </td>
                     </tr>
                   );
@@ -216,7 +224,7 @@ export const PaymentsPage: React.FC = () => {
                 <input 
                   type="text" required value={formData.relatedDealId} onChange={e => setFormData({...formData, relatedDealId: e.target.value})}
                   className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
-                  placeholder="e.g. Deal UUID or Client Name"
+                  placeholder="e.g. Client Name"
                 />
               </div>
               <div>
@@ -237,20 +245,18 @@ export const PaymentsPage: React.FC = () => {
         </div>
       )}
 
-      {/* View Request Modal */}
+      {/* View/Approve Request Modal */}
       {viewRequest && (
         <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-[6px] shadow-xl border border-[#DFDFDF] w-[450px] overflow-hidden">
             <div className="flex justify-between items-center px-6 py-4 border-b border-[#DFDFDF]">
               <div className="flex items-center gap-2">
-                <div className={`p-1.5 rounded-[4px] ${viewRequest.type === 'payment' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                <div className={`p-1.5 rounded-[4px] ${viewRequest.type === 'payment' ? 'bg-[#161616] text-white' : 'bg-[#DFDFDF] text-[#161616]'}`}>
                   {TYPE_CONFIG[viewRequest.type]?.icon}
                 </div>
                 <h3 className="text-[14px] font-bold text-[#161616] tracking-tight capitalize">{viewRequest.type} Request</h3>
               </div>
-              <button onClick={() => setViewRequest(null)} className="text-[#161616]/30 hover:text-[#161616]">
-                ✕
-              </button>
+              <button onClick={() => { setViewRequest(null); setApprovalLink(''); }} className="text-[#161616]/30 hover:text-[#161616]">✕</button>
             </div>
             
             <div className="p-6 flex flex-col gap-5">
@@ -265,40 +271,56 @@ export const PaymentsPage: React.FC = () => {
                   <div className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest mb-1">Requested By</div>
                   <div className="text-sm font-medium text-[#161616]">{viewRequest.requestedBy}</div>
                 </div>
-                <div>
-                  <div className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest mb-1">Related ID</div>
-                  <div className="text-sm font-mono text-[#161616]/80">{viewRequest.relatedDealId}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest mb-1">Date Created</div>
-                  <div className="text-sm font-medium text-[#161616]">{viewRequest.createdAt ? new Date(viewRequest.createdAt).toLocaleDateString() : 'N/A'}</div>
-                </div>
               </div>
 
               <div>
                 <div className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest mb-1">Additional Notes</div>
-                <div className="bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] p-4 text-sm text-[#161616]/80 whitespace-pre-wrap min-h-[80px]">
-                  {viewRequest.notes || <span className="text-[#161616]/30 italic">No notes provided for this request.</span>}
+                <div className="bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] p-4 text-sm text-[#161616]/80 whitespace-pre-wrap min-h-[60px]">
+                  {viewRequest.notes || <span className="text-[#161616]/30 italic">No notes provided.</span>}
                 </div>
               </div>
+
+              {viewRequest.status === 'Pending' && (role === 'SUPER_ADMIN' || role === 'ADMIN') ? (
+                <div className="bg-[#F9F9F9] border border-[#DFDFDF] p-4 rounded-[6px]">
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-2">
+                    {viewRequest.type === 'payment' ? 'Enter Payment Link' : 'Enter Document/Paperwork URL'}
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <LinkIcon className="absolute left-3 top-2.5 w-3.5 h-3.5 text-[#161616]/20" />
+                      <input 
+                        type="url" value={approvalLink} onChange={e => setApprovalLink(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full pl-9 pr-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-[#161616]/40 mt-2 italic">* This link will be shared with the requester upon approval.</p>
+                </div>
+              ) : (viewRequest.paymentLink || viewRequest.documentUrl) && (
+                <div>
+                  <div className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest mb-1">Resource Link</div>
+                  <a href={viewRequest.paymentLink || viewRequest.documentUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 p-3 border border-[#DFDFDF] rounded-[6px] text-sm font-bold text-[#161616] hover:bg-[#F9F9F9]">
+                    <LinkIcon className="w-4 h-4" /> OPEN RESOURCE <ExternalLink className="w-3 h-3 ml-auto" />
+                  </a>
+                </div>
+              )}
             </div>
 
             <div className="px-6 py-4 border-t border-[#DFDFDF] flex justify-end gap-3 bg-[#F9F9F9]">
               <button 
-                onClick={() => setViewRequest(null)}
-                className="px-4 py-2 text-xs font-bold text-[#161616]/60 border border-[#DFDFDF] bg-white rounded-[4px] hover:border-[#161616]/30 transition-all"
+                onClick={() => { setViewRequest(null); setApprovalLink(''); }}
+                className="px-4 py-2 text-xs font-bold text-[#161616]/60 border border-[#DFDFDF] bg-white rounded-[4px]"
               >
                 CLOSE
               </button>
-              {(role === 'SUPER_ADMIN' || role === 'ADMIN') && viewRequest.status === 'Pending' && (
+              {viewRequest.status === 'Pending' && (role === 'SUPER_ADMIN' || role === 'ADMIN') && (
                 <button 
-                  onClick={() => {
-                    handleApprove(viewRequest.id);
-                    setViewRequest(null);
-                  }}
-                  className="bg-[#161616] text-white px-5 py-2 rounded-[4px] text-xs font-bold hover:opacity-90"
+                  onClick={() => handleApprove(viewRequest.id, viewRequest.type)}
+                  disabled={isSaving || !approvalLink}
+                  className="bg-[#161616] text-white px-5 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50"
                 >
-                  APPROVE REQUEST
+                  {isSaving ? 'PROCESSING...' : 'APPROVE & SEND'}
                 </button>
               )}
             </div>

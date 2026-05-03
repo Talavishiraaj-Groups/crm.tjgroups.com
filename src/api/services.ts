@@ -157,11 +157,17 @@ export const api = {
   projects: {
     getAll: async (role: UserRole, userId: string): Promise<Project[]> => {
       const data = await fetchAPI('getProjects');
-      let projects = data.map((r: any) => ({
-        id: r.ID || '', clientName: r.ClientName || 'Unknown', status: r.Status || 'Onboarding', ownerRepId: r.OwnerRepId || '',
-        accountManagerId: r.AccountManagerId || '', liaisonId: r.LiaisonId || '',
-        startDate: r.StartDate || '', dueDate: r.DueDate || ''
-      })) as Project[];
+      let projects = data.map((r: any) => {
+        let status = r.Status || 'Onboarding';
+        // Normalize status names from spreadsheet
+        if (status === 'In Progress') status = 'InProgress';
+        
+        return {
+          id: r.ID || '', clientName: r.ClientName || 'Unknown', status: status as ProjectStatus, ownerRepId: r.OwnerRepId || '',
+          accountManagerId: r.AccountManagerId || '', liaisonId: r.LiaisonId || '',
+          startDate: r.StartDate || '', dueDate: r.DueDate || ''
+        };
+      }) as Project[];
       if (role === 'SALES_REP') projects = projects.filter(p => p.ownerRepId === userId);
       return projects;
     },
@@ -225,7 +231,8 @@ export const api = {
       const data = await fetchAPI('getAdminRequests');
       return data.map((r: any) => ({
         id: r.ID || '', type: r.Type || 'payment', relatedDealId: r.RelatedDealId || '', requestedBy: r.RequestedBy || '', 
-        status: r.Status || 'Pending', createdAt: r.CreatedAt || '', notes: r.Notes || ''
+        status: r.Status || 'Pending', createdAt: r.CreatedAt || '', notes: r.Notes || '',
+        paymentLink: r.PaymentLink || '', documentUrl: r.DocumentUrl || ''
       })) as AdminRequest[];
     },
     create: async (payload: Partial<AdminRequest>): Promise<AdminRequest> => {
@@ -239,8 +246,12 @@ export const api = {
         requestedBy: res.RequestedBy, status: res.Status, createdAt: res.CreatedAt, notes: res.Notes
       } as AdminRequest;
     },
-    updateStatus: async (id: string, status: string): Promise<void> => {
-      await fetchAPI('updateAdminRequest', 'POST', { id, Status: status });
+    update: async (id: string, payload: Partial<AdminRequest>): Promise<void> => {
+      const sheetPayload: any = { id };
+      if (payload.status) sheetPayload.Status = payload.status;
+      if (payload.paymentLink) sheetPayload.PaymentLink = payload.paymentLink;
+      if (payload.documentUrl) sheetPayload.DocumentUrl = payload.documentUrl;
+      await fetchAPI('updateAdminRequest', 'POST', sheetPayload);
     }
   },
 
