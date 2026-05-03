@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
 import { Deal, Lead, User } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Plus, User as UserIcon, Percent } from 'lucide-react';
+import { Plus, User as UserIcon, Percent, AlertCircle } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
 export const DealsPage: React.FC = () => {
@@ -90,19 +90,19 @@ export const DealsPage: React.FC = () => {
   
   const handleUpdateStatus = (dealId: string, status: 'Won' | 'Lost') => {
     if (status === 'Won') {
-      // Permission check
       if (role !== 'SUPER_ADMIN') {
-        alert("Only Super Administrators can mark a deal as WON and set commissions.");
+        alert("Permission Denied: Only Super Administrators can mark deals as WON and set commissions.");
         return;
       }
 
-      const deal = deals.find(d => String(d.id) === String(dealId));
+      // Find deal using a more flexible ID comparison
+      const deal = deals.find(d => String(d.id).trim() === String(dealId).trim());
       if (!deal) {
-        alert("Deal not found in current view.");
+        alert("Error: Deal not found. Please refresh the page.");
         return;
       }
 
-      const lead = leads.find(l => String(l.id) === String(deal.leadId));
+      const lead = leads.find(l => String(l.id).trim() === String(deal.leadId).trim());
       setSelectedDeal(deal);
       setCommissionData({ 
         setterPercentage: 5,
@@ -116,10 +116,10 @@ export const DealsPage: React.FC = () => {
       return;
     }
 
-    if (!window.confirm(`Mark this deal as ${status.toUpperCase()}?`)) return;
+    if (!window.confirm(`Are you sure you want to mark this deal as ${status.toUpperCase()}?`)) return;
     api.deals.updateStatus(dealId, status).then(() => fetchData()).catch(err => {
       console.error(err);
-      alert('Failed to update status');
+      alert('Failed to update deal status');
     });
   };
 
@@ -127,7 +127,7 @@ export const DealsPage: React.FC = () => {
     e.preventDefault();
     if (!selectedDeal) return;
     if (!commissionData.setterId || !commissionData.closerId) {
-      alert('Please select both Setter and Closer');
+      alert('Please select both a Setter and a Closer');
       return;
     }
     setIsSaving(true);
@@ -143,7 +143,7 @@ export const DealsPage: React.FC = () => {
       fetchData();
     } catch (err) {
       console.error(err);
-      alert('Failed to update status');
+      alert('Failed to process deal win. Check your connection.');
     } finally {
       setIsSaving(false);
     }
@@ -151,9 +151,22 @@ export const DealsPage: React.FC = () => {
 
   const getLeadName = (leadId: string) => leads.find((l) => l.id === leadId)?.name || leadId;
   const getUsername = (id: string) => users.find(u => u.id === id)?.username || `ID: ${id}`;
+  
   const getSetterName = (deal: Deal) => {
     const lead = leads.find(l => l.id === deal.leadId);
     return lead ? getUsername(lead.ownerRepId) : 'Unknown';
+  };
+
+  // Helper to check if a deal is active (not won/lost)
+  const isDealActive = (status: string) => {
+    const s = status.toUpperCase();
+    return !s.includes('WON') && !s.includes('LOST') && s !== 'COMPLETED';
+  };
+
+  const getBadgeClass = (status: string) => {
+    if (status.toUpperCase().includes('WON')) return STATUS_BADGE.Won;
+    if (status.toUpperCase().includes('LOST')) return STATUS_BADGE.Lost;
+    return STATUS_BADGE[status as keyof typeof STATUS_BADGE] || STATUS_BADGE.Open;
   };
 
   return (
@@ -171,22 +184,6 @@ export const DealsPage: React.FC = () => {
         </button>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5">
-          <div className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest mb-2">Total Pipeline Value</div>
-          <div className="text-2xl font-bold text-[#161616] tabular-nums">${deals.reduce((s, d) => s + Number(d.value), 0).toLocaleString()}</div>
-        </div>
-        <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5">
-          <div className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest mb-2">Open Deals</div>
-          <div className="text-2xl font-bold text-[#161616] tabular-nums">{deals.filter((d) => d.status === 'Open').length}</div>
-        </div>
-        <div className="bg-[#161616] rounded-[6px] p-5">
-          <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-2">Deals Won</div>
-          <div className="text-2xl font-bold text-white tabular-nums">{deals.filter((d) => d.status === 'Won').length}</div>
-        </div>
-      </div>
-
       {/* Table */}
       {isLoading ? (
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-12 text-center text-[#161616]/30 italic text-sm">Loading deals...</div>
@@ -201,40 +198,54 @@ export const DealsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {deals.map((deal) => (
-                <tr key={deal.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
-                  <td className="px-5 py-3.5 text-xs font-mono text-[#161616]/40">#{deal.id.split('-')[0]}</td>
-                  <td className="px-5 py-3.5 text-sm font-semibold text-[#161616]">{getLeadName(deal.leadId)}</td>
-                  <td className="px-5 py-3.5 text-xs text-[#161616]/60">{getSetterName(deal)}</td>
-                  <td className="px-5 py-3.5 text-xs text-[#161616]/60">{getUsername(deal.ownerRepId)}</td>
-                  <td className="px-5 py-3.5 text-sm font-bold text-[#161616] tabular-nums">${Number(deal.value).toLocaleString()}</td>
-                  <td className="px-5 py-3.5">
-                    <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${STATUS_BADGE[deal.status]}`}>
-                      {deal.status}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    {deal.status === 'Open' ? (
-                      <div className="flex gap-2 justify-end">
-                        <button 
-                          onClick={() => handleUpdateStatus(deal.id, 'Won')}
-                          className="bg-[#161616] text-white px-3 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90"
-                        >
-                          WON
-                        </button>
-                        <button 
-                          onClick={() => handleUpdateStatus(deal.id, 'Lost')}
-                          className="border border-[#DFDFDF] text-[#161616]/40 px-3 py-1 rounded-[4px] text-[10px] font-bold uppercase tracking-widest"
-                        >
-                          LOST
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="text-[10px] text-[#161616]/20 font-mono uppercase">{new Date(deal.createdAt).toLocaleDateString()}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {deals.length === 0 ? (
+                <tr><td colSpan={7} className="px-5 py-16 text-center text-[#161616]/30 italic text-sm">No deals found.</td></tr>
+              ) : (
+                deals.map((deal) => {
+                  const active = isDealActive(deal.status);
+                  const setter = getSetterName(deal);
+                  const closer = getUsername(deal.ownerRepId);
+
+                  return (
+                    <tr key={deal.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
+                      <td className="px-5 py-3.5 text-xs font-mono text-[#161616]/40">#{deal.id.split('-')[0]}</td>
+                      <td className="px-5 py-3.5 text-sm font-semibold text-[#161616]">{getLeadName(deal.leadId)}</td>
+                      <td className="px-5 py-3.5 text-xs text-[#161616]/60">{setter}</td>
+                      <td className="px-5 py-3.5 text-xs text-[#161616]/60">{closer}</td>
+                      <td className="px-5 py-3.5 text-sm font-bold text-[#161616] tabular-nums">${Number(deal.value).toLocaleString()}</td>
+                      <td className="px-5 py-3.5">
+                        <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${getBadgeClass(deal.status)}`}>
+                          {deal.status}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 text-right">
+                        {active ? (
+                          <div className="flex gap-2 justify-end">
+                            {role === 'SUPER_ADMIN' && (
+                              <button 
+                                onClick={() => handleUpdateStatus(deal.id, 'Won')}
+                                className="bg-[#161616] text-white px-3 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90"
+                              >
+                                WON
+                              </button>
+                            )}
+                            <button 
+                              onClick={() => handleUpdateStatus(deal.id, 'Lost')}
+                              className="border border-[#DFDFDF] text-[#161616]/40 px-3 py-1 rounded-[4px] text-[10px] font-bold uppercase tracking-widest hover:text-[#161616] hover:border-[#161616]/30"
+                            >
+                              LOST
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-[#161616]/20 font-mono uppercase">
+                            {deal.createdAt ? new Date(deal.createdAt).toLocaleDateString() : '—'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -243,9 +254,11 @@ export const DealsPage: React.FC = () => {
       {/* Won Deal Modal — SUPER_ADMIN only */}
       {showWonModal && selectedDeal && (
         <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[6px] border border-[#DFDFDF] w-full max-w-[450px] shadow-2xl overflow-hidden">
+          <div className="bg-white rounded-[6px] border border-[#DFDFDF] w-full max-w-[450px] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="px-6 py-4 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9]">
-              <h3 className="text-sm font-bold text-[#161616] uppercase tracking-widest">Process Won Deal</h3>
+              <h3 className="text-sm font-bold text-[#161616] uppercase tracking-widest flex items-center gap-2">
+                <Percent className="w-4 h-4" /> Commission Allocation
+              </h3>
               <button onClick={() => setShowWonModal(false)} className="text-[#161616]/30 hover:text-[#161616]">✕</button>
             </div>
             <form onSubmit={handleConfirmWon} className="p-6 flex flex-col gap-5">
@@ -329,47 +342,8 @@ export const DealsPage: React.FC = () => {
               
               <div className="flex justify-end gap-2 mt-2">
                 <button type="button" onClick={() => setShowWonModal(false)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
-                <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-6 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50">
-                  {isSaving ? 'PROCESSING...' : 'CONFIRM WIN & ALLOCATE'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Create Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[6px] border border-[#DFDFDF] w-full max-w-[400px] shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#DFDFDF] flex justify-between items-center">
-              <h3 className="text-sm font-bold text-[#161616] uppercase tracking-widest">Create New Deal</h3>
-              <button onClick={() => setShowModal(false)} className="text-[#161616]/30 hover:text-[#161616]">✕</button>
-            </div>
-            <form onSubmit={handleCreateDeal} className="p-6 flex flex-col gap-4">
-              <div>
-                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Select Lead</label>
-                <select 
-                  required value={formData.leadId} onChange={e => setFormData({...formData, leadId: e.target.value})}
-                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
-                >
-                  <option value="">— Choose a Lead —</option>
-                  {leads.map(l => (
-                    <option key={l.id} value={l.id}>{l.name} ({l.status})</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Deal Value ($)</label>
-                <input 
-                  type="number" required value={formData.value} onChange={e => setFormData({...formData, value: Number(e.target.value)})}
-                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
-                />
-              </div>
-              <div className="flex justify-end gap-2 mt-2">
-                <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
-                <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-5 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50">
-                  {isSaving ? 'SAVING...' : 'CREATE DEAL'}
+                <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-6 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50 flex items-center gap-2">
+                  {isSaving ? 'PROCESSING...' : 'CONFIRM WIN'}
                 </button>
               </div>
             </form>
