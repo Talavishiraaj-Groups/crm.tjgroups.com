@@ -22,8 +22,8 @@ The system fetches users dynamically from the `Users` sheet in Google Sheets. Yo
 - **Purpose**: Global oversight and configuration.
 - **Permissions**:
   - Full access to all modules (Dashboard, Leads, Deals, Projects, Finance, Admin).
-  - Can create, edit, and delete any record.
-  - Can manage system users and invite new ones.
+  - Can create, edit, and deactivate any record.
+  - Can manage system users, invite new ones, and reset passwords.
   - Exclusive access to the **Finance** page for commission processing.
 
 ### 2. Administrator / Team Lead (`ADMIN`)
@@ -31,7 +31,8 @@ The system fetches users dynamically from the `Users` sheet in Google Sheets. Yo
 - **Permissions**:
   - Access to Dashboard, Leads, Deals, Projects, and Payments.
   - Can view and edit all records belonging to their **Team**.
-  - **No access** to the Finance (Commission Ledger) or User Management pages.
+  - Can approve operational requests for payment or paperwork.
+  - **No access** to the Finance (Commission Ledger) page.
 
 ### 3. Sales Representative (`SALES_REP`)
 - **Purpose**: Individual lead generation and deal closing.
@@ -39,29 +40,34 @@ The system fetches users dynamically from the `Users` sheet in Google Sheets. Yo
   - Restricted Dashboard view (only own metrics).
   - Can only see and manage leads/deals where they are the **Owner**.
   - Can request payments and paperwork via the Payments module.
-  - **No access** to Finance, Projects, or Admin pages.
+  - Access to the **Projects** module to track delivery for won deals.
+  - **No access** to Finance or Admin pages.
 
 ## 🧪 Testing Workflows
 
-### A. Dynamic User Creation (E2E)
+### A. Dynamic User Creation & Deactivation (E2E)
 1. Login as `super_admin`.
 2. Go to **Admin** → **INVITE USER**.
 3. Create a new rep (e.g., "Testing Rep").
 4. Logout and verify the new button appears on the login screen.
-5. Login as "Testing Rep" and verify they see an empty dashboard.
+5. Login back as `super_admin`, go to **Admin**, and click the Three-Dot menu on "Testing Rep".
+6. Click **DEACTIVATE**. Verify the user can no longer log in.
 
-### B. Lead-to-Deal Conversion
+### B. Lead-to-Deal Conversion & LinkedIn Tracking
 1. Login as a `SALES_REP`.
 2. Go to **Leads** → **NEW LEAD**.
-3. Create a lead and click into the details.
-4. Log an interaction (Call/WhatsApp).
-5. Click **CONVERT TO DEAL** (Future expansion: this will open the deal creation form).
+3. Create a lead and ensure the **LinkedIn Profile** URL is added.
+4. Log an interaction (Call/WhatsApp) in the Detail View.
+5. Click **CONVERT TO DEAL**. Verify the lead is archived and a new deal appears in the pipeline.
 
-### C. Financial Processing
-1. Login as `super_admin`.
-2. Go to **Finance**.
-3. Verify the Ledger shows all commissions from all teams.
-4. Click **PROCESS** on any entry to verify the state updates dynamically.
+### C. Financial Processing & Commission Splits
+1. Login as `SALES_REP` or `ADMIN`.
+2. Find an active Deal and click **WON**.
+3. Verify the modal appears asking for **Setter Commission** and **Closer Commission**.
+4. Enter values and submit.
+5. Login as `super_admin` and go to **Finance**.
+6. Verify the new commission entry appears in the Ledger with the correct amounts.
+7. Click **PROCESS** to verify the payout status updates to "Paid".
 
 ---
 
@@ -69,4 +75,4 @@ The system fetches users dynamically from the `Users` sheet in Google Sheets. Yo
 
 - **API URL**: Ensure `.env` has the correct `VITE_API_URL`.
 - **Backend**: The `api.gs` script must be deployed as a "Web App" accessible to "Anyone".
-- **Database**: Ensure the Google Sheet tabs match the `DATABASE_SCHEMA` in `setup.gs`.
+- **Database**: Ensure the Google Sheet tabs match the `DATABASE_SCHEMA` in `setup.gs`, including the new columns for `linkedin`, `amId`, `liaisonId`, and `status`.

@@ -31,8 +31,10 @@ The CRM is designed as a serverless Single Page Application (SPA).
 2. `ADMIN`: Team management access; can view team leads and availability.
 3. `SALES_REP`: Restricted view; can only access leads and deals assigned directly to them.
 
-### Data Aggregation
+### Data Aggregation & Business Logic
 - **Backend KPIs:** Financial KPIs and pipeline metrics are aggregated on the server-side (`controllers.gs`) to ensure the frontend remains performant and free of complex calculation logic.
+- **Commission Split:** The system implements a 2-tier commission model. When a Deal is won, the frontend triggers a modal requiring explicit entry of **Setter** (Lead Generator) and **Closer** (Deal Negotiator) payout amounts, which are then persisted to the `Commissions` sheet.
+- **Account Deactivation:** To maintain data integrity and historical record accuracy, users are never "deleted". Instead, the `status` column in the `Users` sheet is toggled to `DEACTIVATED`, which prevents the user from appearing in the login list or authenticated sessions.
 
 ---
 
@@ -53,10 +55,10 @@ Because the CRM requires simple, low-cost persistence with easy exportability, G
 
 ---
 
-## 3. Data Flow Example (Creating a Lead)
-1. **User Action:** A Sales Rep fills out the "New Lead" form in the React frontend.
-2. **Frontend Service:** The `api.leads.create()` function is called in `src/api/services.ts`.
-3. **HTTP POST:** The frontend sends a JSON payload to the `VITE_API_URL` (Apps Script Web App).
-4. **API Router:** `api.gs` receives the `doPost` request, parses the JSON, reads the `action: 'createLead'`, and forwards the payload to `createRecord` in `controllers.gs`.
-5. **Database Write:** `controllers.gs` finds the `Leads` Google Sheet, generates a UUID and Timestamp, maps the payload to the correct columns, and uses `sheet.appendRow()` to write the data.
-6. **Response:** A success JSON response is sent back to the React app, which updates the UI to reflect the new lead.
+## 3. Data Flow Example (Winning a Deal)
+1. **User Action:** A Sales Rep or Admin clicks the **WON** button on a Deal card.
+2. **Modal Entry:** A modal appears requesting the commission amounts for the Setter and Closer.
+3. **HTTP POST:** The frontend sends the deal status update and the commission payload to the GAS backend.
+4. **API Router:** `api.gs` receives the request and forwards it to the `updateRecord` and `createRecord` functions in `controllers.gs`.
+5. **Database Sync:** The `Deals` sheet is updated to `Closed Won`, and new entries are appended to the `Commissions` sheet.
+6. **Response:** The frontend receives a success confirmation and re-fetches the pipeline to reflect the updated metrics.

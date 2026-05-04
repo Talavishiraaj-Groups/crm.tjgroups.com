@@ -12,41 +12,53 @@ async function fetchAPI(action: string, method: 'GET' | 'POST' = 'GET', payload?
   url.searchParams.set('action', action);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
 
-  if (method === 'GET') {
-    const res = await fetch(url.toString());
-    const json = await res.json();
-    if (json.status !== 'success') throw new Error(json.message);
-    return json.data;
-  } else {
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, payload })
-    });
-    const json = await res.json();
-    if (json.status !== 'success') throw new Error(json.message);
-    return json.data;
+  try {
+    if (method === 'GET') {
+      const res = await fetch(url.toString());
+      const json = await res.json();
+      if (json.status !== 'success') throw new Error(json.message || 'API Error');
+      return json.data;
+    } else {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action, payload })
+      });
+      const json = await res.json();
+      if (json.status !== 'success') throw new Error(json.message || 'API Error');
+      return json.data;
+    }
+  } catch (error) {
+    console.error(`API Failure [${action}]:`, error);
+    throw error;
   }
 }
 
 export const api = {
   leads: {
     getAll: async (role: UserRole, userId: string): Promise<Lead[]> => {
-      const data = await fetchAPI('getLeads');
-      let leads = data.map((r: any) => ({
-        id: r.ID || '', name: r.Name || 'Unknown', email: r.Email || '', phone: r.Phone || '',
-        linkedin: r.Linkedin || '',
-        status: r.Status || 'New', ownerRepId: r.OwnerRepId || '', notes: r.Notes || '',
-        createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
-      })) as Lead[];
-      if (role === 'SALES_REP') leads = leads.filter(l => l.ownerRepId === userId);
-      return leads;
+      try {
+        const data = await fetchAPI('getLeads');
+        if (!Array.isArray(data)) return [];
+        
+        let leads = data.map((r: any) => ({
+          id: String(r.ID || ''), name: r.Name || 'Unknown', email: r.Email || '', phone: r.Phone || '',
+          linkedin: r.Linkedin || '',
+          status: r.Status || 'New', ownerRepId: r.OwnerRepId || '', notes: r.Notes || '',
+          createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
+        })) as Lead[];
+        
+        if (role === 'SALES_REP') leads = leads.filter(l => l.ownerRepId === userId);
+        return leads;
+      } catch (err) {
+        return [];
+      }
     },
     getById: async (id: string): Promise<Lead | undefined> => {
       const data = await fetchAPI('getLeadById', 'GET', null, { id });
       if (!data) return undefined;
       return {
-        id: data.ID || '', name: data.Name || 'Unknown', email: data.Email || '', phone: data.Phone || '',
+        id: String(data.ID || ''), name: data.Name || 'Unknown', email: data.Email || '', phone: data.Phone || '',
         linkedin: data.Linkedin || '',
         status: data.Status || 'New', ownerRepId: data.OwnerRepId || '', notes: data.Notes || '',
         createdAt: data.CreatedAt || '', updatedAt: data.UpdatedAt || ''
@@ -93,13 +105,20 @@ export const api = {
 
   deals: {
     getAll: async (role: UserRole, userId: string): Promise<Deal[]> => {
-      const data = await fetchAPI('getDeals');
-      let deals = data.map((r: any) => ({
-        id: r.ID || '', leadId: r.LeadId || '', value: Number(r.Value || 0), status: r.Status || 'Open', 
-        ownerRepId: r.OwnerRepId || '', createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
-      })) as Deal[];
-      if (role === 'SALES_REP') deals = deals.filter(d => d.ownerRepId === userId);
-      return deals;
+      try {
+        const data = await fetchAPI('getDeals');
+        if (!Array.isArray(data)) return [];
+        
+        let deals = data.map((r: any) => ({
+          id: String(r.ID || ''), leadId: r.LeadId || '', value: Number(r.Value || 0), status: r.Status || 'Open', 
+          ownerRepId: r.OwnerRepId || '', createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
+        })) as Deal[];
+        
+        if (role === 'SALES_REP') deals = deals.filter(d => d.ownerRepId === userId);
+        return deals;
+      } catch (err) {
+        return [];
+      }
     },
     create: async (payload: Partial<Deal>): Promise<Deal> => {
       const sheetPayload = {
@@ -115,40 +134,41 @@ export const api = {
       await fetchAPI('updateDeal', 'POST', { id: dealId, Status: status });
       
       if (status === 'Won') {
-        // Trigger Commission Calculation
-        const deals = await fetchAPI('getDeals');
-        const deal = deals.find((d: any) => d.ID === dealId);
-        if (deal) {
-          const leadId = deal.LeadId;
-          const leads = await fetchAPI('getLeads');
-          const lead = leads.find((l: any) => l.ID === leadId);
-          
-          if (lead) {
-            const value = Number(deal.Value || 0);
+        try {
+          const deals = await fetchAPI('getDeals');
+          const deal = Array.isArray(deals) ? deals.find((d: any) => String(d.ID) === String(dealId)) : null;
+          if (deal) {
+            const leadId = deal.LeadId;
+            const leads = await fetchAPI('getLeads');
+            const lead = Array.isArray(leads) ? leads.find((l: any) => String(l.ID) === String(leadId)) : null;
             
-            // Use provided amounts/IDs or default if missing
-            const setterAmount = commissionData?.setterAmount ?? (value * 0.05);
-            const closerAmount = commissionData?.closerAmount ?? (value * 0.10);
-            const setterId = commissionData?.setterId || lead.OwnerRepId;
-            const closerId = commissionData?.closerId || deal.OwnerRepId;
-            
-            await fetchAPI('createCommission', 'POST', {
-              DealId: dealId,
-              SetterId: setterId,
-              CloserId: closerId,
-              SetterAmount: setterAmount,
-              CloserAmount: closerAmount,
-              PayoutStatus: 'Pending'
-            });
-            
-            await api.logs.create({
-              entityId: dealId,
-              entityType: 'Deal',
-              action: 'COMMISSION_GENERATED',
-              userId: 'SYSTEM',
-              details: `Commissions generated: Setter ($${setterAmount}), Closer ($${closerAmount})`
-            });
+            if (lead) {
+              const value = Number(deal.Value || 0);
+              const setterAmount = commissionData?.setterAmount ?? (value * 0.05);
+              const closerAmount = commissionData?.closerAmount ?? (value * 0.10);
+              const setterId = commissionData?.setterId || lead.OwnerRepId;
+              const closerId = commissionData?.closerId || deal.OwnerRepId;
+              
+              await fetchAPI('createCommission', 'POST', {
+                DealId: dealId,
+                SetterId: setterId,
+                CloserId: closerId,
+                SetterAmount: setterAmount,
+                CloserAmount: closerAmount,
+                PayoutStatus: 'Pending'
+              });
+              
+              await api.logs.create({
+                entityId: dealId,
+                entityType: 'Deal',
+                action: 'COMMISSION_GENERATED',
+                userId: 'SYSTEM',
+                details: `Commissions generated: Setter ($${setterAmount}), Closer ($${closerAmount})`
+              });
+            }
           }
+        } catch (commErr) {
+          console.error("Commission generation failed:", commErr);
         }
       }
     }
@@ -156,20 +176,26 @@ export const api = {
 
   projects: {
     getAll: async (role: UserRole, userId: string): Promise<Project[]> => {
-      const data = await fetchAPI('getProjects');
-      let projects = data.map((r: any) => {
-        let status = r.Status || 'Onboarding';
-        // Normalize status names from spreadsheet
-        if (status === 'In Progress') status = 'InProgress';
+      try {
+        const data = await fetchAPI('getProjects');
+        if (!Array.isArray(data)) return [];
         
-        return {
-          id: r.ID || '', clientName: r.ClientName || 'Unknown', status: status as ProjectStatus, ownerRepId: r.OwnerRepId || '',
-          accountManagerId: r.AccountManagerId || '', liaisonId: r.LiaisonId || '',
-          startDate: r.StartDate || '', dueDate: r.DueDate || ''
-        };
-      }) as Project[];
-      if (role === 'SALES_REP') projects = projects.filter(p => p.ownerRepId === userId);
-      return projects;
+        let projects = data.map((r: any) => {
+          let status = r.Status || 'Onboarding';
+          if (status === 'In Progress') status = 'InProgress';
+          
+          return {
+            id: String(r.ID || ''), clientName: r.ClientName || 'Unknown', status: status as ProjectStatus, ownerRepId: r.OwnerRepId || '',
+            accountManagerId: r.AccountManagerId || '', liaisonId: r.LiaisonId || '',
+            startDate: r.StartDate || '', dueDate: r.DueDate || ''
+          };
+        }) as Project[];
+        
+        if (role === 'SALES_REP') projects = projects.filter(p => p.ownerRepId === userId);
+        return projects;
+      } catch (err) {
+        return [];
+      }
     },
     create: async (payload: Partial<Project>): Promise<Project> => {
       const sheetPayload = {
@@ -198,12 +224,18 @@ export const api = {
 
   users: {
     getAll: async (): Promise<User[]> => {
-      const data = await fetchAPI('getUsers');
-      return data.map((row: any) => ({
-        id: String(row.ID || ''), username: String(row.Username || 'Unknown'), password: row.Password ? String(row.Password) : '', role: row.Role || 'SALES_REP', team: row.Team || '', 
-        status: row.Status || 'Inactive', availability: row.Availability || 'Offline',
-        metrics: row.Metrics ? JSON.parse(row.Metrics) : undefined
-      }));
+      try {
+        const data = await fetchAPI('getUsers');
+        if (!Array.isArray(data)) return [];
+        
+        return data.map((row: any) => ({
+          id: String(row.ID || ''), username: String(row.Username || 'Unknown'), password: row.Password ? String(row.Password) : '', role: row.Role || 'SALES_REP', team: row.Team || '', 
+          status: row.Status || 'Inactive', availability: row.Availability || 'Offline',
+          metrics: row.Metrics ? JSON.parse(row.Metrics) : undefined
+        }));
+      } catch (err) {
+        return [];
+      }
     },
     create: async (payload: Partial<User>): Promise<User> => {
       const sheetPayload = {
@@ -228,12 +260,18 @@ export const api = {
 
   adminRequests: {
     getAll: async (): Promise<AdminRequest[]> => {
-      const data = await fetchAPI('getAdminRequests');
-      return data.map((r: any) => ({
-        id: r.ID || '', type: r.Type || 'payment', relatedDealId: r.RelatedDealId || '', requestedBy: r.RequestedBy || '', 
-        status: r.Status || 'Pending', createdAt: r.CreatedAt || '', notes: r.Notes || '',
-        paymentLink: r.PaymentLink || '', documentUrl: r.DocumentUrl || ''
-      })) as AdminRequest[];
+      try {
+        const data = await fetchAPI('getAdminRequests');
+        if (!Array.isArray(data)) return [];
+        
+        return data.map((r: any) => ({
+          id: String(r.ID || ''), type: r.Type || 'payment', relatedDealId: r.RelatedDealId || '', requestedBy: r.RequestedBy || '', 
+          status: r.Status || 'Pending', createdAt: r.CreatedAt || '', notes: r.Notes || '',
+          paymentLink: r.PaymentLink || '', documentUrl: r.DocumentUrl || ''
+        })) as AdminRequest[];
+      } catch (err) {
+        return [];
+      }
     },
     create: async (payload: Partial<AdminRequest>): Promise<AdminRequest> => {
       const sheetPayload = {
@@ -257,14 +295,24 @@ export const api = {
 
   finance: {
     getCommissions: async (): Promise<Commission[]> => {
-      const data = await fetchAPI('getCommissions');
-      return data.map((r: any) => ({
-        id: r.ID || '', dealId: r.DealId || '', setterId: r.SetterId || '', setterCommissionAmount: Number(r.SetterAmount || 0),
-        closerId: r.CloserId || '', closerCommissionAmount: Number(r.CloserAmount || 0), payoutStatus: r.PayoutStatus || 'Pending'
-      }));
+      try {
+        const data = await fetchAPI('getCommissions');
+        if (!Array.isArray(data)) return [];
+        
+        return data.map((r: any) => ({
+          id: String(r.ID || ''), dealId: r.DealId || '', setterId: r.SetterId || '', setterCommissionAmount: Number(r.SetterAmount || 0),
+          closerId: r.CloserId || '', closerCommissionAmount: Number(r.CloserAmount || 0), payoutStatus: r.PayoutStatus || 'Pending'
+        }));
+      } catch (err) {
+        return [];
+      }
     },
     getKPIs: async () => {
-      return await fetchAPI('getKPIs');
+      try {
+        return await fetchAPI('getKPIs');
+      } catch (err) {
+        return { totalValue: 0, totalCommissions: 0, payoutsPending: 0, payoutsPaid: 0 };
+      }
     },
     processCommission: async (id: string): Promise<void> => {
       await fetchAPI('updateCommission', 'POST', { id, PayoutStatus: 'Paid' });
@@ -273,11 +321,17 @@ export const api = {
   
   logs: {
     getByEntity: async (entityId: string): Promise<Log[]> => {
-      const data = await fetchAPI('getLogs', 'GET', null, { id: entityId });
-      return data.map((r: any) => ({
-        id: r.ID || '', entityId: r.EntityId || '', entityType: r.EntityType || 'Lead',
-        action: r.Action || 'LOG', userId: r.UserId || '', details: r.Details || '', timestamp: r.Timestamp || ''
-      }));
+      try {
+        const data = await fetchAPI('getLogs', 'GET', null, { id: entityId });
+        if (!Array.isArray(data)) return [];
+        
+        return data.map((r: any) => ({
+          id: String(r.ID || ''), entityId: r.EntityId || '', entityType: r.EntityType || 'Lead',
+          action: r.Action || 'LOG', userId: r.UserId || '', details: r.Details || '', timestamp: r.Timestamp || ''
+        }));
+      } catch (err) {
+        return [];
+      }
     },
     create: async (payload: { entityId: string, entityType: string, action: string, userId: string, details: string }): Promise<void> => {
       const sheetPayload = {

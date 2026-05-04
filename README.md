@@ -44,28 +44,28 @@ The system enforces three distinct permission levels:
 Real-time KPI cards (Total Leads, Active Deals, Revenue, Open Projects). Quick-access to recent leads and activity feed.
 
 ### Leads
-Full lead lifecycle management — create, search, filter, convert to deal. Detailed view with interaction logging (call, email, SMS) and guidance notes from team leads.
+Full lead lifecycle management — create, search, filter, convert to deal. Detailed view with interaction logging (call, email, SMS), **LinkedIn Profile** tracking, and guidance notes from team leads.
 
 ### Deals
-Kanban-style deal pipeline tracking from Discovery → Proposal → Negotiation → Closed Won/Lost. Add new deals, update stage and status, view deal value.
+Kanban-style deal pipeline tracking from Discovery → Proposal → Negotiation → Closed Won/Lost. When marking a deal as **WON**, the system prompts for manual **Setter** and **Closer** commission entry, ensuring flexible payout structures.
 
 ### Projects
-Track client delivery and onboarding post-close. Supports both Kanban Board and Table views. Status progresses from Onboarding → In Progress → Completed.
+Track client delivery and onboarding post-close. Supports both Kanban Board and Table views. Projects include assigned roles for **Account Manager (AM)** and **Sales Liaison** to ensure seamless post-sale coordination.
 
 ### Payments
 Submit and manage Payment & Paperwork requests. Admins can view full request details and approve directly from a modal. Status transitions: Pending → Approved.
 
 ### Team *(Admin & Super Admin)*
-Real-time team capacity board showing each member's availability (Available / Busy / Offline), open leads, open deals, and daily interactions. Admins can edit user profiles and reset passwords via the Three-Dot menu.
+Real-time team capacity board showing each member's availability (Available / Busy / Offline), open leads, open deals, and daily interactions. Admins can edit user profiles and reset passwords.
 
 ### Finance *(Super Admin only)*
-Global commission tracking. Automatically calculates setter/closer split commissions. Super Admin can process payouts and mark commissions as Paid.
+Global commission ledger. Automatically manages the split between lead Setters and deal Closers. Super Admins can process payouts and mark commissions as **Paid**.
 
 ### Admin *(Super Admin only)*
-User management hub. Invite new users, assign roles and team assignments, set passwords, edit existing users, and deactivate accounts.
+User management hub. Invite new users, assign roles, set passwords, and manage account statuses. Supports account **Deactivation** to preserve historical data while revoking access.
 
 ### Guide *(All roles)*
-A comprehensive, role-tailored training manual. Each user sees a playbook specific to their permission level — covering every CRM module end-to-end.
+A comprehensive, role-tailored training manual. Each user sees a playbook specific to their permission level — covering every CRM module end-to-end with operational workflows.
 
 ---
 
@@ -153,16 +153,17 @@ Refer to [`docs/BACKEND_DEPLOYMENT.md`](./docs/BACKEND_DEPLOYMENT.md) for step-b
 
 ## Google Sheets Schema
 
-The backend expects the following sheets with exact column names:
+The backend expects the following sheets with exact column names (Capitalization Matters):
 
 | Sheet | Required Columns |
 |---|---|
-| `Users` | `id`, `username`, `password`, `role`, `team`, `availability` |
-| `Leads` | `id`, `name`, `phone`, `email`, `status`, `assignedTo`, `budget`, `source`, `notes` |
-| `Deals` | `id`, `leadId`, `name`, `value`, `stage`, `status`, `assignedTo`, `closerId` |
-| `Projects` | `id`, `dealId`, `clientName`, `status`, `assignedTo`, `startDate`, `notes` |
-| `Requests` | `id`, `type`, `dealId`, `requestedBy`, `status`, `notes`, `createdAt` |
-| `Commissions` | `id`, `dealId`, `setterId`, `closerId`, `setterAmount`, `closerAmount`, `payoutStatus` |
+| `Users` | `ID`, `Username`, `Role`, `Team`, `Status`, `Availability`, `CreatedAt`, `UpdatedAt` |
+| `Leads` | `ID`, `Name`, `Email`, `Phone`, `Status`, `OwnerRepId`, `Notes`, `Linkedin`, `CreatedAt`, `UpdatedAt` |
+| `Deals` | `ID`, `LeadId`, `Value`, `Status`, `OwnerRepId`, `CreatedAt`, `UpdatedAt` |
+| `Projects` | `ID`, `ClientName`, `Status`, `OwnerRepId`, `AccountManagerId`, `LiaisonId`, `StartDate`, `DueDate`, `CreatedAt`, `UpdatedAt` |
+| `AdminRequests` | `ID`, `Type`, `RelatedDealId`, `RequestedBy`, `Status`, `CreatedAt`, `UpdatedAt` |
+| `Commissions` | `ID`, `DealId`, `SetterId`, `SetterAmount`, `CloserId`, `CloserAmount`, `PayoutStatus`, `CreatedAt`, `UpdatedAt` |
+| `Logs` | `ID`, `EntityId`, `EntityType`, `Action`, `UserId`, `Details`, `Timestamp` |
 
 ---
 
