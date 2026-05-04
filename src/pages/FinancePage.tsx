@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
 import { Commission, User } from '../types';
-import { TrendingUp, CheckCircle2, Clock } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { TrendingUp, CheckCircle2, Clock, ShieldAlert } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
 export const FinancePage: React.FC = () => {
+  const { role: currentUserRole } = useAuth();
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [kpis, setKpis] = useState<{ totalValue: number; totalCommissions: number; payoutsPending: number; payoutsPaid: number } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchFinanceData = () => {
+    if (currentUserRole !== 'SUPER_ADMIN') return;
     setIsLoading(true);
     Promise.all([
       api.finance.getCommissions(), 
@@ -21,14 +24,18 @@ export const FinancePage: React.FC = () => {
       setKpis(kpi);
       setUsers(usersData);
       setIsLoading(false);
+    }).catch(err => {
+      console.error(err);
+      setIsLoading(false);
     });
   };
 
   useEffect(() => {
     fetchFinanceData();
-  }, []);
+  }, [currentUserRole]);
 
   const handleProcess = async (id: string) => {
+    if (currentUserRole !== 'SUPER_ADMIN') return;
     if (!window.confirm('Mark this commission as PAID?')) return;
     try {
       await api.finance.processCommission(id);
@@ -40,6 +47,18 @@ export const FinancePage: React.FC = () => {
   };
 
   const getUsername = (id: string) => users.find(u => u.id === id)?.username || `ID: ${id}`;
+
+  if (currentUserRole !== 'SUPER_ADMIN') {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-16 h-16 bg-[#161616]/5 rounded-full flex items-center justify-center mb-4">
+          <ShieldAlert className="w-8 h-8 text-[#161616]/20" />
+        </div>
+        <h3 className="text-lg font-bold text-[#161616]">Access Restricted</h3>
+        <p className="text-sm text-[#161616]/40 max-w-xs mt-2">Only Super Administrators can view financial ledgers and process commissions.</p>
+      </div>
+    );
+  }
 
   if (isLoading || !kpis) {
     return <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-12 text-center text-[#161616]/30 italic text-sm">Loading financial data...</div>;
@@ -74,8 +93,8 @@ export const FinancePage: React.FC = () => {
         ))}
       </div>
 
-      <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden">
-        <div className="flex justify-between items-center px-5 py-4 border-b border-[#DFDFDF]">
+      <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden shadow-sm">
+        <div className="flex justify-between items-center px-5 py-4 border-b border-[#DFDFDF] bg-[#F9F9F9]">
           <h3 className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest">Commission Ledger</h3>
           <span className="text-[10px] text-[#161616]/30 font-mono">{commissions.length} entries</span>
         </div>

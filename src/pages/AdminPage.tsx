@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { User, UserRole, Lead, Deal } from '../types';
 import { api } from '../api/services';
-import { UserPlus, Search, MoreVertical, CheckCircle, XCircle, X, LayoutGrid, Users as UsersIcon, Briefcase } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { UserPlus, Search, MoreVertical, CheckCircle, XCircle, X, LayoutGrid, Users as UsersIcon, Briefcase, ShieldAlert } from 'lucide-react';
 import { ROLE_BADGE, ROLE_LABEL, AVAIL_DOT } from '../utils/badges';
 
 export const AdminPage: React.FC = () => {
-  const [users, setUsers] = useState<User[]>([]);
+  const { role: currentUserRole } = useAuth();
+  const [allUsers, setAllUsers] = useState<User[]>([]); // For lookups (masking SuperAdmins)
+  const [displayUsers, setDisplayUsers] = useState<User[]>([]); // For the management table
   const [leads, setLeads] = useState<Lead[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,10 +25,17 @@ export const AdminPage: React.FC = () => {
     setIsLoading(true);
     Promise.all([
       api.users.getAll(),
-      api.leads.getAll('SUPER_ADMIN', ''), // Fetch all
-      api.deals.getAll('SUPER_ADMIN', '')  // Fetch all
+      api.leads.getAll('SUPER_ADMIN', ''),
+      api.deals.getAll('SUPER_ADMIN', '')
     ]).then(([usersData, leadsData, dealsData]) => {
-      setUsers(usersData);
+      setAllUsers(usersData);
+      
+      // Security Filter: Admins should not see SuperAdmins in the management table
+      let filteredUsers = usersData;
+      if (currentUserRole === 'ADMIN') {
+        filteredUsers = usersData.filter(u => u.role !== 'SUPER_ADMIN');
+      }
+      setDisplayUsers(filteredUsers);
       setLeads(leadsData);
       setDeals(dealsData);
       setIsLoading(false);
@@ -37,10 +47,15 @@ export const AdminPage: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [currentUserRole]);
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentUserRole === 'ADMIN' && newUser.role === 'SUPER_ADMIN') {
+      alert("Security Error: You do not have permission to create a Super Admin account.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await api.users.create({
@@ -65,6 +80,12 @@ export const AdminPage: React.FC = () => {
   const handleEditUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
+
+    if (currentUserRole === 'ADMIN' && editingUser.role === 'SUPER_ADMIN') {
+      alert("Security Error: You cannot grant Super Admin privileges.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await api.users.update(editingUser.id, {
@@ -84,6 +105,7 @@ export const AdminPage: React.FC = () => {
   };
 
   const toggleStatus = async (user: User) => {
+    if (currentUserRole === 'ADMIN' && user.role === 'SUPER_ADMIN') return;
     try {
       const newStatus = user.status === 'Active' ? 'Inactive' : 'Active';
       await api.users.update(user.id, { status: newStatus });
@@ -93,19 +115,30 @@ export const AdminPage: React.FC = () => {
     }
   };
 
-  const getUsername = (id: string) => users.find(u => u.id === id)?.username || `ID: ${id}`;
+  const getUsername = (id: string) => {
+    const u = allUsers.find(user => user.id === id);
+    if (!u) return 'Unknown';
+    if (currentUserRole === 'ADMIN' && u.role === 'SUPER_ADMIN') return 'System Admin';
+    return u.username;
+  };
 
-  const filteredUsers = users.filter((u) =>
+  const filteredDisplayUsers = displayUsers.filter((u) =>
     u.username.toLowerCase().includes(search.toLowerCase()) ||
     u.role.toLowerCase().includes(search.toLowerCase())
   );
+
+  const availableRoles = currentUserRole === 'SUPER_ADMIN' 
+    ? ['SALES_REP', 'ADMIN', 'SUPER_ADMIN'] as UserRole[]
+    : ['SALES_REP', 'ADMIN'] as UserRole[];
 
   return (
     <div className="flex flex-col gap-6 relative">
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-xl font-bold text-[#161616] tracking-tight">Administrative Controls</h2>
-          <p className="text-sm text-[#161616]/40 font-medium mt-0.5">Manage team access and view global ownership assignments.</p>
+          <p className="text-sm text-[#161616]/40 font-medium mt-0.5">
+            {currentUserRole === 'ADMIN' ? 'Manage your team and view assignments.' : 'Manage all team access and system-wide configurations.'}
+          </p>
         </div>
         <div className="flex gap-2">
           <button 
@@ -128,23 +161,26 @@ export const AdminPage: React.FC = () => {
 
       {tab === 'users' ? (
         <>
-          <div className="grid grid-cols-3 gap-4">
-            {(['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] as const).map((r, i) => (
-              <div key={r} className={`rounded-[6px] p-5 border ${i === 0 ? 'bg-[#161616] border-[#161616]' : 'bg-white border-[#DFDFDF]'}`}>
-                <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${i === 0 ? 'text-white/30' : 'text-[#161616]/30'}`}>
-                  {ROLE_LABEL[r]}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {(['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] as const).map((r, i) => {
+              if (currentUserRole === 'ADMIN' && r === 'SUPER_ADMIN') return null;
+              return (
+                <div key={r} className={`rounded-[6px] p-5 border ${i === 0 ? 'bg-[#161616] border-[#161616]' : 'bg-white border-[#DFDFDF]'}`}>
+                  <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${i === 0 ? 'text-white/30' : 'text-[#161616]/30'}`}>
+                    {ROLE_LABEL[r]}
+                  </div>
+                  <div className={`text-2xl font-bold tabular-nums ${i === 0 ? 'text-white' : 'text-[#161616]'}`}>
+                    {allUsers.filter((u) => u.role === r).length}
+                  </div>
                 </div>
-                <div className={`text-2xl font-bold tabular-nums ${i === 0 ? 'text-white' : 'text-[#161616]'}`}>
-                  {users.filter((u) => u.role === r).length}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="flex items-center gap-3 bg-white border border-[#DFDFDF] rounded-[6px] px-4 py-2.5">
             <Search className="w-4 h-4 text-[#161616]/20 shrink-0" />
             <input
-              type="text" placeholder="Search by name or role..." value={search} onChange={(e) => setSearch(e.target.value)}
+              type="text" placeholder="Search team members..." value={search} onChange={(e) => setSearch(e.target.value)}
               className="flex-1 text-sm focus:outline-none text-[#161616] placeholder:text-[#161616]/30"
             />
           </div>
@@ -162,43 +198,47 @@ export const AdminPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredUsers.map((u) => (
-                    <tr key={u.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-[#DFDFDF] flex items-center justify-center text-xs font-bold text-[#161616]">
-                            {u.username[0].toUpperCase()}
+                  {filteredDisplayUsers.length === 0 ? (
+                    <tr><td colSpan={5} className="px-5 py-10 text-center text-[#161616]/30 italic">No team members found.</td></tr>
+                  ) : (
+                    filteredDisplayUsers.map((u) => (
+                      <tr key={u.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-[#DFDFDF] flex items-center justify-center text-xs font-bold text-[#161616]">
+                              {u.username[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="text-sm font-semibold text-[#161616]">{u.username}</p>
+                              <p className="text-[10px] text-[#161616]/30 font-mono">{u.id}</p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-sm font-semibold text-[#161616]">{u.username}</p>
-                            <p className="text-[10px] text-[#161616]/30 font-mono">{u.id}</p>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${ROLE_BADGE[u.role]}`}>
+                            {ROLE_LABEL[u.role]}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5 text-sm text-[#161616]/40">{u.team || '—'}</td>
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-1.5">
+                            <div className={`w-2 h-2 rounded-full ${u.status === 'Active' ? 'bg-[#161616]' : 'bg-[#DFDFDF]'}`}></div>
+                            <span className="text-sm text-[#161616]/60">{u.status}</span>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${ROLE_BADGE[u.role]}`}>
-                          {ROLE_LABEL[u.role]}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3.5 text-sm text-[#161616]/40">{u.team || '—'}</td>
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-1.5">
-                          <div className={`w-2 h-2 rounded-full ${u.status === 'Active' ? 'bg-[#161616]' : 'bg-[#DFDFDF]'}`}></div>
-                          <span className="text-sm text-[#161616]/60">{u.status}</span>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3.5 text-right">
-                        <div className="flex items-center gap-2 justify-end">
-                          <button onClick={() => toggleStatus(u)} className="text-[10px] font-bold text-[#161616]/50 border border-[#DFDFDF] px-2 py-1 rounded-[4px] hover:text-[#161616] transition-all">
-                            {u.status === 'Active' ? 'DEACTIVATE' : 'ACTIVATE'}
-                          </button>
-                          <button onClick={() => setEditingUser(u)} className="p-1 hover:bg-[#F9F9F9] rounded-[4px]">
-                            <MoreVertical className="w-4 h-4 text-[#161616]/20" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-5 py-3.5 text-right">
+                          <div className="flex items-center gap-2 justify-end">
+                            <button onClick={() => toggleStatus(u)} className="text-[10px] font-bold text-[#161616]/50 border border-[#DFDFDF] px-2 py-1 rounded-[4px] hover:text-[#161616] transition-all">
+                              {u.status === 'Active' ? 'DEACTIVATE' : 'ACTIVATE'}
+                            </button>
+                            <button onClick={() => setEditingUser(u)} className="p-1 hover:bg-[#F9F9F9] rounded-[4px]">
+                              <MoreVertical className="w-4 h-4 text-[#161616]/20" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -254,15 +294,16 @@ export const AdminPage: React.FC = () => {
                 <tbody>
                   {deals.map(d => {
                     const lead = leads.find(l => l.id === d.leadId);
-                    const setter = lead ? getUsername(lead.ownerRepId) : 'Unknown';
-                    const closer = getUsername(d.ownerRepId);
+                    const setterName = lead ? getUsername(lead.ownerRepId) : 'Unknown';
+                    const closerName = getUsername(d.ownerRepId);
+
                     return (
                       <tr key={d.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9]">
                         <td className="px-5 py-3 text-sm font-medium text-[#161616] truncate max-w-[120px]">
                           {lead?.name || `Deal ${d.id.split('-')[0]}`}
                         </td>
-                        <td className="px-5 py-3 text-xs text-[#161616]/60">{setter}</td>
-                        <td className="px-5 py-3 text-xs text-[#161616]/60">{closer}</td>
+                        <td className="px-5 py-3 text-xs text-[#161616]/60">{setterName}</td>
+                        <td className="px-5 py-3 text-xs text-[#161616]/60">{closerName}</td>
                       </tr>
                     );
                   })}
@@ -278,7 +319,7 @@ export const AdminPage: React.FC = () => {
         <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-[6px] shadow-xl border border-[#DFDFDF] w-[400px] overflow-hidden">
             <div className="flex justify-between items-center px-6 py-4 border-b border-[#DFDFDF]">
-              <h3 className="text-[14px] font-bold text-[#161616] tracking-tight">Invite New User</h3>
+              <h3 className="text-[14px] font-bold text-[#161616] tracking-tight">Invite New Member</h3>
               <button onClick={() => setShowInviteModal(false)} className="text-[#161616]/30 hover:text-[#161616]"><X className="w-4 h-4" /></button>
             </div>
             <form onSubmit={handleInvite} className="p-6 flex flex-col gap-4">
@@ -293,9 +334,9 @@ export const AdminPage: React.FC = () => {
               <div>
                 <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Role</label>
                 <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as UserRole})} className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white">
-                  <option value="SALES_REP">Sales Rep</option>
-                  <option value="ADMIN">Admin (Team Lead)</option>
-                  <option value="SUPER_ADMIN">Super Administrator</option>
+                  {availableRoles.map(r => (
+                    <option key={r} value={r}>{ROLE_LABEL[r]}</option>
+                  ))}
                 </select>
               </div>
               <div className="flex justify-end gap-2 mt-4">
@@ -312,7 +353,7 @@ export const AdminPage: React.FC = () => {
         <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-[6px] shadow-xl border border-[#DFDFDF] w-[400px] overflow-hidden">
             <div className="flex justify-between items-center px-6 py-4 border-b border-[#DFDFDF]">
-              <h3 className="text-[14px] font-bold text-[#161616] tracking-tight">Edit User</h3>
+              <h3 className="text-[14px] font-bold text-[#161616] tracking-tight">Edit Team Member</h3>
               <button onClick={() => setEditingUser(null)} className="text-[#161616]/30 hover:text-[#161616]"><X className="w-4 h-4" /></button>
             </div>
             <form onSubmit={handleEditUser} className="p-6 flex flex-col gap-4">
@@ -323,9 +364,9 @@ export const AdminPage: React.FC = () => {
               <div>
                 <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Role</label>
                 <select value={editingUser.role} onChange={e => setEditingUser({...editingUser, role: e.target.value as UserRole})} className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white">
-                  <option value="SALES_REP">Sales Rep</option>
-                  <option value="ADMIN">Admin (Team Lead)</option>
-                  <option value="SUPER_ADMIN">Super Administrator</option>
+                  {availableRoles.map(r => (
+                    <option key={r} value={r}>{ROLE_LABEL[r]}</option>
+                  ))}
                 </select>
               </div>
               <div className="flex justify-end gap-2 mt-4">
