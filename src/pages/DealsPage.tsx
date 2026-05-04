@@ -3,7 +3,7 @@ import { api } from '../api/services';
 import { Deal, Lead, User, Commission } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Plus, User as UserIcon, Percent, Edit3, X } from 'lucide-react';
-import { STATUS_BADGE } from '../utils/badges';
+import { STATUS_BADGE, ROLE_LABEL } from '../utils/badges';
 
 export const DealsPage: React.FC = () => {
   const { role: currentUserRole, user } = useAuth();
@@ -395,7 +395,7 @@ export const DealsPage: React.FC = () => {
                   className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
                 >
                   <option value="">— Choose a Lead —</option>
-                  {leads.filter(l => l.status !== 'Converted').map(l => (
+                  {leads.filter(l => l.status !== 'Closed').map(l => (
                     <option key={l.id} value={l.id}>{l.name} ({l.status})</option>
                   ))}
                 </select>
