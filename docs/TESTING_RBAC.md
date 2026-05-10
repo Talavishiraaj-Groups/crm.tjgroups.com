@@ -1,6 +1,6 @@
-# TJGROPS CRM - Manual Verification & RBAC Guide
+# TJGROUPS CRM - Manual Verification & RBAC Guide
 
-This document outlines the credentials and steps for manually verifying the **TJGROPS CRM** system and its Role-Based Access Control (RBAC).
+This document outlines the credentials and steps for manually verifying the **TJGROUPS CRM** system and its Role-Based Access Control (RBAC).
 
 ## 🔑 Live User Credentials
 

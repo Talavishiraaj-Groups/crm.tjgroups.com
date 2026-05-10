@@ -1,5 +1,5 @@
 /**
- * TJGROPS CRM - Database Controllers
+ * TJGROUPS CRM - Database Controllers
  * 
  * Handles CRUD operations interacting with Google Sheets.
  */

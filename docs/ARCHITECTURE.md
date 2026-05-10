@@ -1,6 +1,6 @@
-# TJGROPS CRM System Architecture
+# TJGROUPS CRM System Architecture
 
-This document provides a high-level overview of the architectural design of the TJGROPS CRM.
+This document provides a high-level overview of the architectural design of the TJGROUPS CRM.
 
 ## Overview
 The CRM is designed as a serverless Single Page Application (SPA). 

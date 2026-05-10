@@ -1,10 +1,10 @@
-# TJGROPS CRM Backend Deployment Guide
+# TJGROUPS CRM Backend Deployment Guide
 
-This document explains how to deploy the Google Apps Script backend that powers the TJGROPS CRM. The backend uses Google Drive and Google Sheets as its primary database.
+This document explains how to deploy the Google Apps Script backend that powers the TJGROUPS CRM. The backend uses Google Drive and Google Sheets as its primary database.
 
 ## 1. Setup the Google Apps Script Project
 1. Navigate to [script.google.com](https://script.google.com/).
-2. Click **New Project** and name it "TJGROPS CRM Backend".
+2. Click **New Project** and name it "TJGROUPS CRM Backend".
 3. In the left-hand sidebar, create four script files matching the ones found in `/backend_apps_script`:
    - `setup.gs`
    - `api.gs`
@@ -30,7 +30,7 @@ We use Google Apps Script's `PropertiesService` to securely store environment va
 4. **Authorization:** Google will ask you to authorize the script. This is required so the script can create folders and files on your behalf.
    - Click "Review permissions".
    - Select your Google Account.
-   - Click "Advanced" -> "Go to TJGROPS CRM Backend (unsafe)".
+   - Click "Advanced" -> "Go to TJGROUPS CRM Backend (unsafe)".
    - Click "Allow".
 5. **Result:** The script will automatically connect to your `MAIN_FOLDER_ID`, generate the `Databases` subfolder, and scaffold all the required Google Sheets (`Users`, `Leads`, `Deals`, etc.) with proper headers.
 

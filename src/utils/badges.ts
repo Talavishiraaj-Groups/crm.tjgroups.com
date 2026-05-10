@@ -1,5 +1,5 @@
 /**
- * TJGROPS CRM — Monochromatic Status Utilities
+ * TJGROUPS CRM — Monochromatic Status Utilities
  * 
  * Enterprise-grade status system using only the brand palette.
  * State is communicated through weight, opacity, border, and fill — not color.
@@ -13,56 +13,59 @@
 
 export const STATUS_BADGE = {
   // Lead status
-  New:        'border border-[#161616]/25 text-[#161616]/70 bg-transparent',
-  Contacted:  'bg-[#DFDFDF] text-[#161616]',
-  Qualified:  'bg-[#161616] text-white',
-  Closed:     'bg-[#161616] text-white',
+  New: 'border border-[#161616]/25 text-[#161616]/70 bg-transparent',
+  Contacted: 'bg-[#DFDFDF] text-[#161616]',
+  Qualified: 'bg-[#DFDFDF] text-[#161616]',
+  Converted: 'bg-[#161616] text-white',
+  Closed: 'bg-[#F9F9F9] text-[#161616]/40 border border-[#DFDFDF]',
 
   // Deal status
-  Open:       'bg-[#DFDFDF] text-[#161616]',
-  Won:        'bg-[#161616] text-white',
-  Lost:       'border border-[#161616]/20 text-[#161616]/40 line-through',
+  Open: 'bg-[#DFDFDF] text-[#161616]',
+  Won: 'bg-[#161616] text-white',
+  Lost: 'border border-[#161616]/20 text-[#161616]/40 line-through',
 
   // Project status
   Onboarding: 'border border-[#161616]/25 text-[#161616]/70',
   InProgress: 'bg-[#DFDFDF] text-[#161616]',
-  Completed:  'bg-[#161616] text-white',
+  Completed: 'bg-[#161616] text-white',
 
   // Payout status
-  Pending:    'border border-[#161616]/25 text-[#161616]/70',
+  Pending: 'border border-[#161616]/25 text-[#161616]/70',
   Processing: 'bg-[#DFDFDF] text-[#161616]',
-  Paid:       'bg-[#161616] text-white',
+  Paid: 'bg-[#161616] text-white',
 
   // Payment/Paperwork status
-  Sent:       'bg-[#DFDFDF] text-[#161616]',
-  Signed:     'bg-[#161616] text-white',
-  Failed:     'border border-[#161616]/20 text-[#161616]/40',
-  Drafting:   'border border-[#161616]/20 text-[#161616]/50',
-  Archived:   'text-[#161616]/30',
+  Sent: 'bg-[#DFDFDF] text-[#161616]',
+  Signed: 'bg-[#161616] text-white',
+  Failed: 'border border-[#161616]/20 text-[#161616]/40',
+  Drafting: 'border border-[#161616]/20 text-[#161616]/50',
+  Archived: 'text-[#161616]/30',
 } as const;
 
 export const ROLE_BADGE = {
   SUPER_ADMIN: 'bg-[#161616] text-white',
   ADMIN:       'bg-[#DFDFDF] text-[#161616]',
   SALES_REP:   'border border-[#161616]/25 text-[#161616]/70',
+  SETTER:      'border border-[#161616]/25 text-[#161616]/40',
 } as const;
 
 export const AVAIL_BADGE = {
   Available: 'text-[#161616]',
-  Busy:      'text-[#161616]/50',
-  Offline:   'text-[#161616]/25',
+  Busy: 'text-[#161616]/50',
+  Offline: 'text-[#161616]/25',
 } as const;
 
 export const AVAIL_DOT = {
   Available: 'bg-[#161616]',
-  Busy:      'bg-[#161616]/40',
-  Offline:   'bg-[#161616]/15',
+  Busy: 'bg-[#161616]/40',
+  Offline: 'bg-[#161616]/15',
 } as const;
 
 export const ROLE_LABEL: Record<string, string> = {
   SUPER_ADMIN: 'Super Admin',
   ADMIN:       'Administrator',
   SALES_REP:   'Sales Rep',
+  SETTER:      'Lead Setter',
 };
 
 // Generic badge class

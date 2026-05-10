@@ -1,5 +1,5 @@
 /**
- * TJGROPS CRM - Apps Script Backend Setup
+ * TJGROUPS CRM - Apps Script Backend Setup
  * 
  * Run the setupCRMDatabase() function ONCE from the Apps Script editor to 
  * generate the necessary folder structure and Google Sheets.

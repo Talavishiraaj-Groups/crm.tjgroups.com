@@ -1,5 +1,5 @@
 /**
- * TJGROPS CRM - Utilities
+ * TJGROUPS CRM - Utilities
  * 
  * Helper functions for API formatting and data manipulation.
  */

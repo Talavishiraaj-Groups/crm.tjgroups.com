@@ -1,5 +1,5 @@
 /**
- * TJGROPS CRM - Apps Script API Endpoints
+ * TJGROUPS CRM - Apps Script API Endpoints
  * 
  * Handles all incoming HTTP requests from the React frontend.
  */

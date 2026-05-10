@@ -1,13 +1,13 @@
-# TJGROPS CRM Platform
+# TJGROUPS CRM Platform
 
 > **Enterprise-grade Sales & Delivery Management System**  
-> Built for the TJGROPS team to manage leads, deals, payments, projects, commissions, and user access — all from a single, role-aware interface.
+> Built for the TJGROUPS team to manage leads, deals, payments, projects, commissions, and user access — all from a single, role-aware interface.
 
 ---
 
 ## Overview
 
-TJGROPS CRM is a production-grade internal platform built with **React + TypeScript + Vite**, backed by a **Google Apps Script** API connected to **Google Sheets** as the database. It enforces **Role-Based Access Control (RBAC)** to ensure each team member sees only what they are authorized to access.
+TJGROUPS CRM is a production-grade internal platform built with **React + TypeScript + Vite**, backed by a **Google Apps Script** API connected to **Google Sheets** as the database. It enforces **Role-Based Access Control (RBAC)** to ensure each team member sees only what they are authorized to access.
 
 ---
 
@@ -185,4 +185,4 @@ This is a private internal system. For changes, create a feature branch and open
 
 ## License
 
-Private & Proprietary — © 2026 TJGROPS. All rights reserved.
+Private & Proprietary — © 2026 TJGROUPS. All rights reserved.

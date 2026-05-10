@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
-import { Project, Deal, ProjectStatus } from '../types';
+import { Project, Deal, ProjectStatus, User as UserType } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { LayoutGrid, List, Plus, Calendar, User } from 'lucide-react';
+import { LayoutGrid, List, Plus, Calendar, User } from 'lucide-center'; // Note: Lucide icons can sometimes be tricky with names, I'll use Lucide-react
+import { LayoutGrid as GridIcon, List as ListIcon, Plus as PlusIcon, Calendar as CalendarIcon, User as UserIcon } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
 const STAGES: { key: ProjectStatus; label: string; pct: number }[] = [
@@ -11,7 +12,6 @@ const STAGES: { key: ProjectStatus; label: string; pct: number }[] = [
   { key: 'Completed', label: 'Completed', pct: 100 },
 ];
 
-// Progress opacity per stage — no color, just white/dark fill intensity
 const STAGE_FILL: Record<ProjectStatus, string> = {
   Onboarding: 'bg-[#161616]/20',
   InProgress:  'bg-[#161616]/60',
@@ -22,7 +22,7 @@ export const ProjectsPage: React.FC = () => {
   const { role, user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
-  const [usersList, setUsers] = useState<any[]>([]);
+  const [usersList, setUsers] = useState<UserType[]>([]);
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
   const [isLoading, setIsLoading] = useState(true);
 
@@ -88,6 +88,8 @@ export const ProjectsPage: React.FC = () => {
     }
   };
 
+  const isManagement = role === 'SUPER_ADMIN' || role === 'ADMIN';
+
   return (
     <div className="flex flex-col gap-6 relative">
       <div className="flex justify-between items-center">
@@ -96,31 +98,29 @@ export const ProjectsPage: React.FC = () => {
           <p className="text-sm text-[#161616]/40 font-medium mt-0.5">Track active client implementations and onboarding.</p>
         </div>
         <div className="flex items-center gap-3">
-          {/* View toggle */}
           <div className="flex bg-[#F9F9F9] border border-[#DFDFDF] p-0.5 rounded-[6px]">
             <button
               onClick={() => setView('kanban')}
               className={`p-2 rounded-[4px] transition-all ${view === 'kanban' ? 'bg-white shadow-sm text-[#161616]' : 'text-[#161616]/30 hover:text-[#161616]/60'}`}
             >
-              <LayoutGrid className="w-4 h-4" />
+              <GridIcon className="w-4 h-4" />
             </button>
             <button
               onClick={() => setView('table')}
               className={`p-2 rounded-[4px] transition-all ${view === 'table' ? 'bg-white shadow-sm text-[#161616]' : 'text-[#161616]/30 hover:text-[#161616]/60'}`}
             >
-              <List className="w-4 h-4" />
+              <ListIcon className="w-4 h-4" />
             </button>
           </div>
           <button 
             onClick={() => setShowModal(true)}
             className="flex items-center gap-2 bg-[#161616] text-white px-4 py-2 rounded-[6px] text-xs font-bold hover:opacity-90 transition-all"
           >
-            <Plus className="w-4 h-4" /> NEW PROJECT
+            <PlusIcon className="w-4 h-4" /> NEW PROJECT
           </button>
         </div>
       </div>
 
-      {/* New Project Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-[6px] border border-[#DFDFDF] w-full max-w-[400px] shadow-2xl overflow-hidden">
@@ -141,8 +141,9 @@ export const ProjectsPage: React.FC = () => {
                 <div>
                   <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Account Manager</label>
                   <select 
+                    disabled={!isManagement}
                     value={formData.accountManagerId} onChange={e => setFormData({...formData, accountManagerId: e.target.value})}
-                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white disabled:bg-[#F9F9F9] disabled:cursor-not-allowed"
                   >
                     <option value="">— Unassigned —</option>
                     {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
@@ -151,8 +152,9 @@ export const ProjectsPage: React.FC = () => {
                 <div>
                   <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Sales Liaison</label>
                   <select 
+                    disabled={!isManagement}
                     value={formData.liaisonId} onChange={e => setFormData({...formData, liaisonId: e.target.value})}
-                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white disabled:bg-[#F9F9F9] disabled:cursor-not-allowed"
                   >
                     <option value="">— Unassigned —</option>
                     {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
@@ -195,10 +197,8 @@ export const ProjectsPage: React.FC = () => {
             const isLast = stageIdx === STAGES.length - 1;
             return (
               <div key={stage.key} className="flex-1 min-w-[280px] flex flex-col gap-3">
-                {/* Column header */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    {/* Stage indicator: filled square, half, empty */}
                     <div className={`w-2.5 h-2.5 rounded-sm border border-[#161616]/30 ${isLast ? 'bg-[#161616]' : stageIdx === 1 ? 'bg-[#161616]/40' : 'bg-transparent'}`}></div>
                     <span className="text-[11px] font-bold text-[#161616]/50 uppercase tracking-widest">{stage.label}</span>
                   </div>
@@ -207,7 +207,6 @@ export const ProjectsPage: React.FC = () => {
                   </span>
                 </div>
 
-                {/* Drop zone */}
                 <div className="flex flex-col gap-3 min-h-[200px] bg-[#F9F9F9] rounded-[6px] p-2 border border-dashed border-[#DFDFDF]">
                   {stageProjects.length === 0 ? (
                     <div className="flex-1 flex items-center justify-center text-[11px] text-[#161616]/20 italic py-8">No projects</div>
@@ -219,18 +218,17 @@ export const ProjectsPage: React.FC = () => {
                       >
                         <h4 className="text-sm font-bold text-[#161616] mb-3">{project.clientName}</h4>
                         <div className="flex items-center gap-2 text-[11px] text-[#161616]/40 mb-1">
-                          <Calendar className="w-3 h-3" />
+                          <CalendarIcon className="w-3 h-3" />
                           Due {new Date(project.dueDate).toLocaleDateString()}
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-[#161616]/40 mb-1">
-                          <User className="w-3 h-3" />
+                          <UserIcon className="w-3 h-3" />
                           AM: {usersList.find(u => u.id === project.accountManagerId)?.username || 'Unassigned'}
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-[#161616]/40 mb-4">
-                          <User className="w-3 h-3 text-blue-500" />
+                          <UserIcon className="w-3 h-3 text-[#161616]/60" />
                           Liaison: {usersList.find(u => u.id === project.liaisonId)?.username || 'Unassigned'}
                         </div>
-                        {/* Progress bar — monochromatic */}
                         <div className="w-full h-1 bg-[#DFDFDF] rounded-full">
                           <div className={`h-1 rounded-full ${STAGE_FILL[project.status]}`} style={{ width: `${stage.pct}%` }}></div>
                         </div>
@@ -246,7 +244,6 @@ export const ProjectsPage: React.FC = () => {
           })}
         </div>
       ) : (
-        /* Table View */
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden">
           <table className="w-full border-collapse">
             <thead>
@@ -258,7 +255,7 @@ export const ProjectsPage: React.FC = () => {
             </thead>
             <tbody>
               {projects.length === 0 ? (
-                <tr><td colSpan={6} className="px-5 py-16 text-center text-[#161616]/30 italic text-sm">No projects found.</td></tr>
+                <tr><td colSpan={7} className="px-5 py-16 text-center text-[#161616]/30 italic text-sm">No projects found.</td></tr>
               ) : (
                 projects.map((project) => {
                   const stageConfig = STAGES.find((s) => s.key === project.status);

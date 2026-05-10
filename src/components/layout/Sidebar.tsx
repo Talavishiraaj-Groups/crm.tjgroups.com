@@ -23,7 +23,7 @@ const navItems = [
   { name: 'Payments', icon: FileText, path: '/payments', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
   { name: 'Team', icon: UserCircle, path: '/team', roles: ['SUPER_ADMIN', 'ADMIN'] },
   { name: 'Finance', icon: DollarSign, path: '/finance', roles: ['SUPER_ADMIN'] },
-  { name: 'Admin', icon: ShieldCheck, path: '/admin', roles: ['SUPER_ADMIN'] },
+  { name: 'Admin', icon: ShieldCheck, path: '/admin', roles: ['SUPER_ADMIN', 'ADMIN'] },
   { name: 'Guide', icon: BookOpen, path: '/guide', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
 ];
 
@@ -48,7 +48,7 @@ export const Sidebar: React.FC = () => {
     <div className="w-[260px] h-screen bg-white border-r border-[#DFDFDF] flex flex-col fixed left-0 top-0 z-20">
       {/* Logo */}
       <div className="flex items-center px-6 h-16 border-b border-[#DFDFDF]">
-        <img src={logo} alt="TJGROPS" className="h-8 w-auto" />
+        <img src={logo} alt="TJGROUPS" className="h-8 w-auto" />
       </div>
 
       {/* Nav */}
@@ -59,10 +59,9 @@ export const Sidebar: React.FC = () => {
             to={item.path}
             end={item.exact}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-[6px] text-sm font-medium transition-all ${
-                isActive
-                  ? 'bg-[#161616] text-white'
-                  : 'text-[#161616]/60 hover:bg-[#F9F9F9] hover:text-[#161616]'
+              `flex items-center gap-3 px-3 py-2.5 rounded-[6px] text-sm font-medium transition-all ${isActive
+                ? 'bg-[#161616] text-white'
+                : 'text-[#161616]/60 hover:bg-[#F9F9F9] hover:text-[#161616]'
               }`
             }
           >
@@ -90,7 +89,7 @@ export const Sidebar: React.FC = () => {
             <LogOut className="w-4 h-4" />
           </button>
         </div>
-        
+
         {/* Attribution Footer */}
         <div className="mt-4 px-1 text-[9px] text-[#161616]/30 font-medium leading-relaxed">
           <p>© 2026 <a href="https://www.talavishiraajgroups.com/" target="_blank" rel="noopener noreferrer" className="hover:text-[#161616] transition-colors">Talavishiraaj Groups</a>. All rights reserved.</p>

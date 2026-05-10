@@ -1,4 +1,4 @@
-export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'SALES_REP';
+export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'SALES_REP' | 'SETTER';
 
 export interface User {
   id: string;
@@ -15,7 +15,7 @@ export interface User {
   };
 }
 
-export type LeadStatus = 'New' | 'Contacted' | 'Qualified' | 'Closed';
+export type LeadStatus = 'New' | 'Contacted' | 'Qualified' | 'Converted' | 'Closed';
 
 export interface Lead {
   id: string;

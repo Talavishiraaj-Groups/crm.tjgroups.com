@@ -91,7 +91,7 @@ export const api = {
         status: 'Open',
         value: value
       });
-      await api.leads.update(leadId, { status: 'Closed' });
+      await api.leads.update(leadId, { status: 'Converted' });
       await api.logs.create({
         entityId: leadId,
         entityType: 'Lead',
@@ -255,6 +255,9 @@ export const api = {
       
       const res = await fetchAPI('updateUser', 'POST', sheetPayload);
       return { id: res.ID, username: res.Username, password: res.Password, role: res.Role, team: res.Team, status: res.Status, availability: res.Availability } as User;
+    },
+    delete: async (id: string): Promise<void> => {
+      await fetchAPI('deleteUser', 'POST', { id });
     }
   },
 

@@ -8,10 +8,10 @@ export const GuidePage: React.FC = () => {
     <div className="flex flex-col gap-6 max-w-5xl mx-auto pb-12">
       <div className="border-b border-[#DFDFDF] pb-6">
         <h2 className="text-2xl font-bold text-[#161616] tracking-tight flex items-center gap-3">
-          TJGROPS CRM Platform Guide
+          TJGROUPS CRM Platform Guide
         </h2>
         <p className="text-sm text-[#161616]/50 font-medium mt-1.5 max-w-2xl">
-          Welcome to the comprehensive user manual for the TJGROPS CRM. This guide is tailored to your specific access level and covers all end-to-end workflows required to successfully operate within the system.
+          Welcome to the comprehensive user manual for the TJGROUPS CRM. This guide is tailored to your specific access level and covers all end-to-end workflows required to successfully operate within the system.
         </p>
       </div>
 
@@ -20,7 +20,7 @@ export const GuidePage: React.FC = () => {
       {/* ------------------------------------------------------------------------- */}
       {role === 'SUPER_ADMIN' && (
         <div className="flex flex-col gap-8">
-          
+
           <div className="bg-white border border-[#161616]/10 shadow-sm rounded-[6px] overflow-hidden">
             <div className="bg-[#161616] px-6 py-4 flex items-center gap-3">
               <h3 className="text-lg font-bold text-white tracking-wide">Super Administrator Playbook</h3>
@@ -39,7 +39,7 @@ export const GuidePage: React.FC = () => {
                   <ul className="list-disc pl-5 space-y-2">
                     <li><strong>Creating Users:</strong> Click "+ INVITE USER" to add new employees. You must provide a username, assign a role, and set their initial <strong>Password</strong>.</li>
                     <li><strong>LinkedIn Leads:</strong> When adding new leads, ensure the <strong>LinkedIn Profile</strong> URL is included if available. This allows the team to research the prospect before the first touchpoint.</li>
-                    <li><strong>Role Hierarchy:</strong> 
+                    <li><strong>Role Hierarchy:</strong>
                       <ul className="list-[circle] pl-5 mt-1 space-y-1 text-[#161616]/60">
                         <li><em>Super Admin</em>: Full access (Finance, Admin, approvals).</li>
                         <li><em>Admin (Team Lead)</em>: Can view all team metrics, edit users, and approve requests. Cannot access Finance.</li>
@@ -84,7 +84,7 @@ export const GuidePage: React.FC = () => {
       {/* ------------------------------------------------------------------------- */}
       {role === 'ADMIN' && (
         <div className="flex flex-col gap-8">
-          
+
           <div className="bg-white border border-[#161616]/10 shadow-sm rounded-[6px] overflow-hidden">
             <div className="bg-[#161616] px-6 py-4 flex items-center gap-3">
               <h3 className="text-lg font-bold text-white tracking-wide">Team Lead Operations Guide</h3>
@@ -140,14 +140,14 @@ export const GuidePage: React.FC = () => {
       {/* ------------------------------------------------------------------------- */}
       {role === 'SALES_REP' && (
         <div className="flex flex-col gap-8">
-          
+
           <div className="bg-white border border-[#161616]/10 shadow-sm rounded-[6px] overflow-hidden">
             <div className="bg-[#161616] px-6 py-4 flex items-center gap-3">
               <h3 className="text-lg font-bold text-white tracking-wide">Sales Representative Playbook</h3>
             </div>
             <div className="p-6 text-sm text-[#161616]/80 leading-relaxed">
               <p className="mb-6 border-l-2 border-[#161616] pl-4 italic text-[#161616]/60">
-                Welcome to the TJGROPS CRM. Your core focus is executing the pipeline: turning new Leads into Qualified prospects, converting them into Deals, and closing revenue. The CRM automatically isolates your data so you only see what is assigned to you.
+                Welcome to the TJGROUPS CRM. Your core focus is executing the pipeline: turning new Leads into Qualified prospects, converting them into Deals, and closing revenue. The CRM automatically isolates your data so you only see what is assigned to you.
               </p>
 
               <div className="space-y-8">
