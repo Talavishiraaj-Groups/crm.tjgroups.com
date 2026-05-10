@@ -17,6 +17,7 @@ export const LeadDetail: React.FC = () => {
   const [lead, setLead] = useState<Lead | null>(null);
   const [logs, setLogs] = useState<Log[]>([]);
   const [requests, setRequests] = useState<AdminRequest[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [newLog, setNewLog] = useState('');
   const [logType, setLogType] = useState<'call' | 'message' | 'email'>('call');
@@ -30,11 +31,13 @@ export const LeadDetail: React.FC = () => {
       try {
         setIsLoading(true);
         // Fetch lead, logs, and requests in parallel
-        const [leadData, logsData, requestsData] = await Promise.all([
+        const [leadData, logsData, requestsData, usersData] = await Promise.all([
           api.leads.getById(id),
           api.logs.getByEntity(id),
-          api.adminRequests.getAll()
+          api.adminRequests.getAll(),
+          api.users.getAll()
         ]);
+        setUsers(usersData);
 
         if (leadData) setLead(leadData);
         setLogs(logsData || []);
@@ -155,7 +158,7 @@ export const LeadDetail: React.FC = () => {
     </div>
   );
 
-  const guidanceLogs = logs.filter(l => l.action === 'GUIDANCE');
+  const getUsername = (id: string) => users.find(u => u.id === id || u.username === id)?.username || id;
 
   return (
     <div className="flex flex-col gap-6">
@@ -244,6 +247,21 @@ export const LeadDetail: React.FC = () => {
                   <Calendar className="w-3.5 h-3.5" /> {new Date(lead.createdAt).toLocaleDateString(undefined, { dateStyle: 'long' })}
                 </div>
               </div>
+
+              <div className="pt-4 mt-4 border-t border-[#DFDFDF] space-y-3">
+                <div>
+                  <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">Assigned Setter</p>
+                  <div className="flex items-center gap-2 text-sm text-[#161616]/70 font-semibold uppercase tracking-tight">
+                    <User className="w-3.5 h-3.5 text-[#161616]/20" /> {getUsername(lead.setterId || lead.ownerRepId)}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">Assigned Closer</p>
+                  <div className="flex items-center gap-2 text-sm text-[#161616]/70 font-semibold uppercase tracking-tight">
+                    <User className="w-3.5 h-3.5 text-[#161616]/20" /> {lead.closerId ? getUsername(lead.closerId) : 'Not Assigned'}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -298,6 +316,46 @@ export const LeadDetail: React.FC = () => {
                     </div>
                   </button>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Management Controls */}
+          {(role === 'ADMIN' || role === 'SUPER_ADMIN') && (
+            <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5 shadow-sm">
+              <h3 className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest mb-4">Management Controls</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest block mb-1.5">Re-assign Setter</label>
+                  <select 
+                    value={lead.setterId || lead.ownerRepId}
+                    onChange={async (e) => {
+                      await api.leads.update(lead.id, { setterId: e.target.value });
+                      fetchData();
+                    }}
+                    className="w-full bg-[#F9F9F9] border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#161616]/30 transition-all"
+                  >
+                    {users.filter(u => u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN').map(u => (
+                      <option key={u.id} value={u.id}>{u.username}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest block mb-1.5">Assign Closer</label>
+                  <select 
+                    value={lead.closerId || ''}
+                    onChange={async (e) => {
+                      await api.leads.update(lead.id, { closerId: e.target.value });
+                      fetchData();
+                    }}
+                    className="w-full bg-[#F9F9F9] border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#161616]/30 transition-all"
+                  >
+                    <option value="">No Closer Assigned</option>
+                    {users.filter(u => u.role === 'SALES_REP' || u.role === 'ADMIN').map(u => (
+                      <option key={u.id} value={u.id}>{u.username}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
           )}

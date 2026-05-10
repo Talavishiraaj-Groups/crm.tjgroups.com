@@ -24,7 +24,9 @@ export const LeadsPage: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
     name: '', email: '', phone: '', linkedin: '', notes: '', 
-    ownerRepId: user?.id || '' 
+    ownerRepId: user?.id || '',
+    setterId: user?.id || '',
+    closerId: ''
   });
 
   const fetchData = () => {
@@ -95,7 +97,10 @@ export const LeadsPage: React.FC = () => {
         status: 'New'
       });
       setShowModal(false);
-      setFormData({ name: '', email: '', phone: '', linkedin: '', notes: '', ownerRepId: user.id });
+      setFormData({ 
+        name: '', email: '', phone: '', linkedin: '', notes: '', 
+        ownerRepId: user.id, setterId: user.id, closerId: '' 
+      });
       fetchData();
     } catch (err) {
       console.error(err);
@@ -173,7 +178,7 @@ export const LeadsPage: React.FC = () => {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-[#DFDFDF] bg-[#F9F9F9]">
-                {['Client Details', 'Setter / Closer', 'Lifecycle Stage', 'Creation Date', 'Quick Actions', ''].map((h) => (
+                {['Client Details', 'Lead Setter', 'Sales Closer', 'Lifecycle Stage', 'Creation Date', 'Quick Actions', ''].map((h) => (
                   <th key={h} className="text-left px-6 py-4 text-[9px] font-black text-[#161616]/40 uppercase tracking-[0.2em]">
                     {h}
                   </th>
@@ -183,7 +188,7 @@ export const LeadsPage: React.FC = () => {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-20 text-center text-[#161616]/20 italic text-sm font-medium">
+                  <td colSpan={7} className="px-6 py-20 text-center text-[#161616]/20 italic text-sm font-medium">
                     No records found matching the current criteria.
                   </td>
                 </tr>
@@ -206,16 +211,18 @@ export const LeadsPage: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-5">
-                      <div className="flex flex-col gap-1.5">
-                        <div className="flex items-center gap-2 text-[10px] text-[#161616]/60 font-bold uppercase tracking-wider">
-                          <span className="text-[8px] text-[#161616]/20">SET:</span> {getUsername(lead.setterId || lead.ownerRepId)}
-                        </div>
-                        {lead.closerId && (
-                          <div className="flex items-center gap-2 text-[10px] text-[#161616]/60 font-bold uppercase tracking-wider">
-                            <span className="text-[8px] text-[#161616]/20">CLS:</span> {getUsername(lead.closerId)}
-                          </div>
-                        )}
+                      <div className="flex items-center gap-2 text-[10px] text-[#161616]/60 font-bold uppercase tracking-wider">
+                        <UserIcon className="w-3 h-3 text-[#161616]/20" /> {getUsername(lead.setterId || lead.ownerRepId)}
                       </div>
+                    </td>
+                    <td className="px-6 py-5">
+                      {lead.closerId ? (
+                        <div className="flex items-center gap-2 text-[10px] text-[#161616]/60 font-bold uppercase tracking-wider">
+                          <UserIcon className="w-3 h-3 text-[#161616]/20" /> {getUsername(lead.closerId)}
+                        </div>
+                      ) : (
+                        <span className="text-[9px] font-black text-[#161616]/10 uppercase tracking-widest italic">Unassigned</span>
+                      )}
                     </td>
                     <td className="px-6 py-5">
                       <span className={`px-2.5 py-1 rounded-[4px] text-[9px] font-black uppercase tracking-[0.1em] ${STATUS_BADGE[lead.status]}`}>
@@ -349,16 +356,30 @@ export const LeadsPage: React.FC = () => {
               </div>
 
               {isManagement && (
-                <div>
-                  <label className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest block mb-2">Owner Assignment (Setter/Admin)</label>
-                  <select 
-                    value={formData.ownerRepId} onChange={e => setFormData({...formData, ownerRepId: e.target.value})}
-                    className="w-full px-4 py-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] text-sm focus:outline-none focus:border-[#161616] transition-all appearance-none cursor-pointer font-bold uppercase tracking-wider"
-                  >
-                    {users.filter(u => u.role !== 'SUPER_ADMIN').map(u => (
-                      <option key={u.id} value={u.id}>{u.username} ({u.role})</option>
-                    ))}
-                  </select>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest block mb-2">Assign Setter</label>
+                    <select 
+                      value={formData.setterId} onChange={e => setFormData({...formData, setterId: e.target.value})}
+                      className="w-full px-4 py-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] text-[11px] focus:outline-none focus:border-[#161616] transition-all appearance-none cursor-pointer font-bold uppercase tracking-wider"
+                    >
+                      {users.filter(u => u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN').map(u => (
+                        <option key={u.id} value={u.id}>{u.username}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest block mb-2">Assign Closer</label>
+                    <select 
+                      value={formData.closerId} onChange={e => setFormData({...formData, closerId: e.target.value})}
+                      className="w-full px-4 py-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] text-[11px] focus:outline-none focus:border-[#161616] transition-all appearance-none cursor-pointer font-bold uppercase tracking-wider"
+                    >
+                      <option value="">No Closer</option>
+                      {users.filter(u => u.role === 'SALES_REP' || u.role === 'ADMIN').map(u => (
+                        <option key={u.id} value={u.id}>{u.username}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               )}
 
