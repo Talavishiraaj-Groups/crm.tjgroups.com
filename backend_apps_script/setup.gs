@@ -12,8 +12,8 @@ const MAIN_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('MAIN
 // Define the core tables and their headers
 const DATABASE_SCHEMA = {
   'Users': ['ID', 'Username', 'Role', 'Team', 'Status', 'Availability', 'CreatedAt', 'UpdatedAt'],
-  'Leads': ['ID', 'Name', 'Email', 'Phone', 'Status', 'OwnerRepId', 'Notes', 'Linkedin', 'CreatedAt', 'UpdatedAt'],
-  'Deals': ['ID', 'LeadId', 'Value', 'Status', 'OwnerRepId', 'CreatedAt', 'UpdatedAt'],
+  'Leads': ['ID', 'Name', 'Email', 'Phone', 'Status', 'OwnerRepId', 'SetterId', 'CloserId', 'Notes', 'Linkedin', 'CreatedAt', 'UpdatedAt'],
+  'Deals': ['ID', 'LeadId', 'Value', 'Status', 'OwnerRepId', 'SetterId', 'CloserId', 'CreatedAt', 'UpdatedAt'],
   'Projects': ['ID', 'ClientName', 'Status', 'OwnerRepId', 'AccountManagerId', 'LiaisonId', 'StartDate', 'DueDate', 'CreatedAt', 'UpdatedAt'],
   'AdminRequests': ['ID', 'Type', 'RelatedDealId', 'RequestedBy', 'Status', 'CreatedAt', 'UpdatedAt'],
   'Commissions': ['ID', 'DealId', 'SetterId', 'SetterAmount', 'CloserId', 'CloserAmount', 'PayoutStatus', 'CreatedAt', 'UpdatedAt'],
@@ -43,9 +43,40 @@ function setupCRMDatabase() {
     
     // Save the DB folder ID to script properties so the API can find it later
     PropertiesService.getScriptProperties().setProperty('DB_FOLDER_ID', dbFolder.getId());
-    
+
+    refreshDatabaseHeaders(); // Automatically sync headers
   } catch (error) {
-    Logger.log('Error during setup: ' + error.toString());
+    Logger.log('Setup Error: ' + error.toString());
+  }
+}
+
+/**
+ * Syncs the headers of existing sheets with the DATABASE_SCHEMA.
+ * Call this after updating DATABASE_SCHEMA to add new columns.
+ */
+function refreshDatabaseHeaders() {
+  const dbFolderId = PropertiesService.getScriptProperties().getProperty('DB_FOLDER_ID');
+  if (!dbFolderId) return;
+  
+  const folder = DriveApp.getFolderById(dbFolderId);
+  
+  for (const [sheetName, expectedHeaders] of Object.entries(DATABASE_SCHEMA)) {
+    const files = folder.getFilesByName(sheetName);
+    if (files.hasNext()) {
+      const ss = SpreadsheetApp.openById(files.next().getId());
+      const sheet = ss.getActiveSheet();
+      const currentHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      
+      // Find missing headers
+      const missingHeaders = expectedHeaders.filter(h => !currentHeaders.includes(h));
+      
+      if (missingHeaders.length > 0) {
+        const startCol = currentHeaders.length + 1;
+        sheet.getRange(1, startCol, 1, missingHeaders.length).setValues([missingHeaders]);
+        sheet.getRange(1, startCol, 1, missingHeaders.length).setFontWeight("bold");
+        Logger.log(`Added missing columns to ${sheetName}: ${missingHeaders.join(', ')}`);
+      }
+    }
   }
 }
 
