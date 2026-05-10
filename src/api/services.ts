@@ -348,7 +348,7 @@ export const api = {
     getByEntity: async (entityId: string): Promise<Log[]> => {
       try {
         // If entityId is GLOBAL, we fetch all logs without ID param
-        const params = entityId === 'GLOBAL' ? {} : { id: entityId };
+        const params: Record<string, string> = entityId === 'GLOBAL' ? {} : { id: entityId };
         const data = await fetchAPI('getLogs', 'GET', null, params);
         if (!Array.isArray(data)) return [];
         
