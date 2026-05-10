@@ -10,27 +10,30 @@ import {
   DollarSign,
   ShieldCheck,
   LogOut,
-  BookOpen
+  BookOpen,
+  CalendarDays
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import logo from '../../assets/tjgroups-logo-dark.png';
 
 const navItems = [
-  { name: 'Dashboard', icon: LayoutDashboard, path: '/', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'], exact: true },
-  { name: 'Leads', icon: Users, path: '/leads', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
-  { name: 'Deals', icon: Briefcase, path: '/deals', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
+  { name: 'Dashboard', icon: LayoutDashboard, path: '/', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'], exact: true },
+  { name: 'Leads', icon: Users, path: '/leads', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
+  { name: 'Deals', icon: Briefcase, path: '/deals', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
   { name: 'Projects', icon: CheckSquare, path: '/projects', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
-  { name: 'Payments', icon: FileText, path: '/payments', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
+  { name: 'Meetings', icon: CalendarDays, path: '/meetings', roles: ['SUPER_ADMIN', 'ADMIN', 'SETTER'] },
+  { name: 'Payments', icon: FileText, path: '/payments', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
   { name: 'Team', icon: UserCircle, path: '/team', roles: ['SUPER_ADMIN', 'ADMIN'] },
   { name: 'Finance', icon: DollarSign, path: '/finance', roles: ['SUPER_ADMIN'] },
   { name: 'Admin', icon: ShieldCheck, path: '/admin', roles: ['SUPER_ADMIN', 'ADMIN'] },
-  { name: 'Guide', icon: BookOpen, path: '/guide', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
+  { name: 'Guide', icon: BookOpen, path: '/guide', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
 ];
 
 const roleLabel: Record<string, string> = {
   SUPER_ADMIN: 'Super Admin',
   ADMIN: 'Administrator',
   SALES_REP: 'Sales Rep',
+  SETTER: 'Setter',
 };
 
 export const Sidebar: React.FC = () => {

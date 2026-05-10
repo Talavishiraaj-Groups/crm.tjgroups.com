@@ -90,6 +90,7 @@ export interface Log {
   action: string;
   userId: string;
   details: string;
+  metadata?: string;
   timestamp: string;
 }
 

@@ -9,6 +9,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/deals': 'Deals',
   '/projects': 'Projects',
   '/payments': 'Payments & Paperwork',
+  '/meetings': 'Setter Meetings',
   '/team': 'Team & Availability',
   '/finance': 'Finance & Commissions',
   '/admin': 'User Management',

@@ -17,7 +17,7 @@ const DATABASE_SCHEMA = {
   'Projects': ['ID', 'ClientName', 'Status', 'OwnerRepId', 'AccountManagerId', 'LiaisonId', 'StartDate', 'DueDate', 'CreatedAt', 'UpdatedAt'],
   'AdminRequests': ['ID', 'Type', 'RelatedDealId', 'RequestedBy', 'Status', 'CreatedAt', 'UpdatedAt'],
   'Commissions': ['ID', 'DealId', 'SetterId', 'SetterAmount', 'CloserId', 'CloserAmount', 'PayoutStatus', 'CreatedAt', 'UpdatedAt'],
-  'Logs': ['ID', 'EntityId', 'EntityType', 'Action', 'UserId', 'Details', 'Timestamp']
+  'Logs': ['ID', 'EntityId', 'EntityType', 'Action', 'UserId', 'Details', 'Metadata', 'Timestamp']
 };
 
 function setupCRMDatabase() {

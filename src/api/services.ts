@@ -239,13 +239,12 @@ export const api = {
       } as Project;
     },
     update: async (id: string, payload: Partial<Project>): Promise<void> => {
-      const sheetPayload = {
-        id,
-        Status: payload.status,
-        AccountManagerId: payload.accountManagerId,
-        LiaisonId: payload.liaisonId,
-        Notes: payload.notes
-      };
+      const sheetPayload: any = { id };
+      if (payload.status !== undefined) sheetPayload.Status = payload.status;
+      if (payload.accountManagerId !== undefined) sheetPayload.AccountManagerId = payload.accountManagerId;
+      if (payload.liaisonId !== undefined) sheetPayload.LiaisonId = payload.liaisonId;
+      if (payload.notes !== undefined) sheetPayload.Notes = payload.notes;
+      
       await fetchAPI('updateProject', 'POST', sheetPayload);
     }
   },
@@ -366,10 +365,11 @@ export const api = {
         return [];
       }
     },
-    create: async (payload: { entityId: string, entityType: string, action: string, userId: string, details: string }): Promise<void> => {
+    create: async (payload: { entityId: string, entityType: string, action: string, userId: string, details: string, metadata?: string }): Promise<void> => {
       const sheetPayload = {
         EntityId: payload.entityId, EntityType: payload.entityType,
-        Action: payload.action, UserId: payload.userId, Details: payload.details
+        Action: payload.action, UserId: payload.userId, Details: payload.details,
+        Metadata: payload.metadata || ''
       };
       await fetchAPI('createLog', 'POST', sheetPayload);
     }
