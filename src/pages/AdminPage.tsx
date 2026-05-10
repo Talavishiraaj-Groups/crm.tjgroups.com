@@ -212,6 +212,9 @@ export const AdminPage: React.FC = () => {
             >
               <Bell className="w-3.5 h-3.5" /> REQUESTS {requests.filter(r => r.status === 'Pending').length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>}
             </button>
+            <button 
+              onClick={() => setTab('assignments')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-[4px] text-[10px] font-bold uppercase tracking-wider transition-all ${tab === 'assignments' ? 'bg-white shadow-sm text-[#161616]' : 'text-[#161616]/40 hover:text-[#161616]/60'}`}
             >
               <LayoutGrid className="w-3.5 h-3.5" /> ASSIGNMENTS
             </button>
