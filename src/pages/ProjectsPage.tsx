@@ -118,9 +118,9 @@ export const ProjectsPage: React.FC = () => {
       });
       setNewLog('');
       fetchProjectLogs(editingProject.id);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to add update');
+      alert('Failed to add update: ' + (err.message || 'Check your connection'));
     }
   };
 

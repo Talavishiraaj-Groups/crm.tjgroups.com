@@ -11,24 +11,30 @@ async function fetchAPI(action: string, method: 'GET' | 'POST' = 'GET', payload?
   const url = new URL(API_URL);
   url.searchParams.set('action', action);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-
   try {
-    if (method === 'GET') {
-      const res = await fetch(url.toString());
-      const json = await res.json();
-      if (json.status !== 'success') throw new Error(json.message || 'API Error');
-      return json.data;
-    } else {
-      const res = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action, payload })
-      });
-      const json = await res.json();
-      if (json.status !== 'success') throw new Error(json.message || 'API Error');
-      return json.data;
+    const fetchOptions: RequestInit = method === 'POST' ? {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, payload })
+    } : { method: 'GET' };
+
+    const res = await fetch(method === 'GET' ? url.toString() : API_URL, fetchOptions);
+    const text = await res.text();
+    
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      console.error(`Invalid JSON for ${action}:`, text);
+      throw new Error(`Invalid response from server for ${action}.`);
     }
-  } catch (error) {
+
+    if (json.status !== 'success') {
+      console.error(`API Error for ${action}:`, json.message);
+      throw new Error(json.message || `API Error for ${action}`);
+    }
+    return json.data;
+  } catch (error: any) {
     console.error(`API Failure [${action}]:`, error);
     throw error;
   }

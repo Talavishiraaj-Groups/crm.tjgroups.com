@@ -65,9 +65,9 @@ export const LeadDetail: React.FC = () => {
       });
       setNewLog('');
       fetchData();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to log activity. Please check your connection.');
+      alert('Failed to log activity: ' + (err.message || 'Check your connection'));
     }
   };
 
@@ -100,9 +100,9 @@ export const LeadDetail: React.FC = () => {
       await api.leads.convertToDeal(id, user.id, dealValue);
       alert('Lead successfully converted to Deal!');
       navigate('/deals');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to convert lead. Ensure the backend is responding.');
+      alert('Failed to convert lead: ' + (err.message || 'Ensure the backend is responding.'));
     } finally {
       setIsConverting(false);
     }

@@ -96,9 +96,9 @@ export const Dashboard: React.FC = () => {
       setDailyNote('');
       setHasLoggedToday(true);
       fetchData();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to submit daily summary.');
+      alert('Failed to log activity: ' + (err.message || 'Unknown error'));
     } finally {
       setIsLoggingDaily(false);
     }
