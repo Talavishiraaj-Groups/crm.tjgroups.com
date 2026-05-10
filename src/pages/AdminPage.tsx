@@ -290,8 +290,13 @@ export const AdminPage: React.FC = () => {
                 <tr><td colSpan={6} className="px-5 py-16 text-center text-[#161616]/30 italic text-sm">No active requests.</td></tr>
               ) : (
                 requests.map((r) => {
-                  const lead = leads.find(l => l.id === r.relatedDealId);
                   return (
+                    <tr key={r.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
+                      <td className="px-5 py-3.5">
+                        <span className="text-[10px] font-black text-[#161616] uppercase tracking-widest bg-[#F9F9F9] px-2 py-1 rounded-[3px] border border-[#DFDFDF]">
+                          {r.type}
+                        </span>
+                      </td>
                       <td className="px-5 py-3.5 text-sm font-medium text-[#161616]">
                         {(() => {
                           const deal = deals.find(d => d.id === r.relatedDealId);

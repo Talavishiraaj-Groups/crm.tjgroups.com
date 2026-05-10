@@ -248,6 +248,7 @@ export const ProjectsPage: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
       {editingProject && (
         <div className="fixed inset-0 bg-[#161616]/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-[12px] border border-[#DFDFDF] w-full max-w-[850px] shadow-2xl overflow-hidden">
@@ -338,8 +339,6 @@ export const ProjectsPage: React.FC = () => {
             </div>
           </div>
         </div>
-          </div>
-        </div>
       )}
 
       {isLoading ? (
@@ -365,6 +364,7 @@ export const ProjectsPage: React.FC = () => {
                   {stageProjects.length === 0 ? (
                     <div className="flex-1 flex items-center justify-center text-[11px] text-[#161616]/20 italic py-8">No projects</div>
                   ) : (
+                    stageProjects.map((project) => (
                       <div
                         key={project.id}
                         onClick={() => {
