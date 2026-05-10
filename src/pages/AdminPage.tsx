@@ -40,7 +40,10 @@ export const AdminPage: React.FC = () => {
     ]).then(([usersData, leadsData, dealsData, requestsData]) => {
       setAllUsers(usersData);
       
-      setDisplayUsers(usersData); // Always show all users to Admin/SuperAdmin for oversight
+      const filteredUsers = currentUserRole === 'SUPER_ADMIN' 
+        ? usersData 
+        : usersData.filter(u => u.role !== 'SUPER_ADMIN');
+      setDisplayUsers(filteredUsers); 
       setLeads(leadsData);
       setDeals(dealsData);
       setRequests(requestsData);
@@ -160,7 +163,7 @@ export const AdminPage: React.FC = () => {
   const getUsername = (id: string) => {
     const u = allUsers.find(user => user.id === id);
     if (!u) return 'Unknown';
-    if (currentUserRole === 'ADMIN' && u.role === 'SUPER_ADMIN') return 'System Admin';
+    if (currentUserRole !== 'SUPER_ADMIN' && u.role === 'SUPER_ADMIN') return 'System Admin';
     return u.username;
   };
 

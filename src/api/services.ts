@@ -82,12 +82,12 @@ export const api = {
     },
     update: async (id: string, payload: Partial<Lead>): Promise<void> => {
       const sheetPayload: any = { id };
-      if (payload.status) sheetPayload.Status = payload.status;
-      if (payload.notes) sheetPayload.Notes = payload.notes;
-      if (payload.name) sheetPayload.Name = payload.name;
-      if (payload.linkedin) sheetPayload.Linkedin = payload.linkedin;
-      if (payload.setterId) sheetPayload.SetterId = payload.setterId;
-      if (payload.closerId) sheetPayload.CloserId = payload.closerId;
+      if (payload.status !== undefined) sheetPayload.Status = payload.status;
+      if (payload.notes !== undefined) sheetPayload.Notes = payload.notes;
+      if (payload.name !== undefined) sheetPayload.Name = payload.name;
+      if (payload.linkedin !== undefined) sheetPayload.Linkedin = payload.linkedin;
+      if (payload.setterId !== undefined) sheetPayload.SetterId = payload.setterId;
+      if (payload.closerId !== undefined) sheetPayload.CloserId = payload.closerId;
       await fetchAPI('updateLead', 'POST', sheetPayload);
     },
     convertToDeal: async (leadId: string, userId: string, value: number): Promise<Deal> => {

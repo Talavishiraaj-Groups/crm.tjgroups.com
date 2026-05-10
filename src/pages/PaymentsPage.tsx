@@ -26,6 +26,9 @@ export const PaymentsPage: React.FC = () => {
   const [formData, setFormData] = useState({
     type: 'payment' as 'payment' | 'paperwork', relatedDealId: '', notes: ''
   });
+  const [leads, setLeads] = useState<any[]>([]);
+  const [deals, setDeals] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
 
   const fetchRequests = () => {
     setIsLoading(true);
@@ -37,6 +40,9 @@ export const PaymentsPage: React.FC = () => {
 
   useEffect(() => {
     fetchRequests();
+    api.leads.getAll('SUPER_ADMIN', '').then(setLeads);
+    api.deals.getAll('SUPER_ADMIN', '').then(setDeals);
+    api.users.getAll().then(setUsers);
   }, []);
 
   const handleCreateRequest = async (e: React.FormEvent) => {
@@ -164,8 +170,17 @@ export const PaymentsPage: React.FC = () => {
                           <span className="text-[11px] font-bold uppercase tracking-wider">{conf.label}</span>
                         </div>
                       </td>
-                      <td className="px-5 py-3.5 text-xs font-mono text-[#161616]/40">{req.relatedDealId}</td>
-                      <td className="px-5 py-3.5 text-sm text-[#161616]/60">{req.requestedBy}</td>
+                      <td className="px-5 py-3.5 text-xs font-mono text-[#161616]/40">
+                        {(() => {
+                          const deal = deals.find(d => d.id === req.relatedDealId);
+                          const leadId = deal ? deal.leadId : req.relatedDealId;
+                          const lead = leads.find(l => l.id === leadId);
+                          return lead?.name || req.relatedDealId;
+                        })()}
+                      </td>
+                      <td className="px-5 py-3.5 text-sm text-[#161616]/60">
+                        {users.find(u => u.id === req.requestedBy)?.username || req.requestedBy}
+                      </td>
                       <td className="px-5 py-3.5">
                         <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${STATUS_BADGE[req.status as keyof typeof STATUS_BADGE] || 'border border-[#161616]/20 text-[#161616]/50'}`}>
                           {req.status}
@@ -220,12 +235,23 @@ export const PaymentsPage: React.FC = () => {
                 </div>
               </div>
               <div>
-                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Related ID (Deal/Lead)</label>
-                <input 
-                  type="text" required value={formData.relatedDealId} onChange={e => setFormData({...formData, relatedDealId: e.target.value})}
-                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
-                  placeholder="e.g. Client Name"
-                />
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Related Client / Lead</label>
+                <select 
+                  required value={formData.relatedDealId} onChange={e => setFormData({...formData, relatedDealId: e.target.value})}
+                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                >
+                  <option value="">— Select Client/Lead —</option>
+                  <optgroup label="Active Leads">
+                    {leads.filter(l => l.status !== 'Converted').map(l => (
+                      <option key={l.id} value={l.id}>{l.name} (Lead)</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Won Deals">
+                    {deals.filter(d => d.status === 'Won').map(d => (
+                      <option key={d.id} value={d.id}>{d.clientName || d.id} (Deal)</option>
+                    ))}
+                  </optgroup>
+                </select>
               </div>
               <div>
                 <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Additional Notes</label>
@@ -269,7 +295,9 @@ export const PaymentsPage: React.FC = () => {
                 </div>
                 <div>
                   <div className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest mb-1">Requested By</div>
-                  <div className="text-sm font-medium text-[#161616]">{viewRequest.requestedBy}</div>
+                  <div className="text-sm font-medium text-[#161616]">
+                    {users.find(u => u.id === viewRequest.requestedBy)?.username || viewRequest.requestedBy}
+                  </div>
                 </div>
               </div>
 

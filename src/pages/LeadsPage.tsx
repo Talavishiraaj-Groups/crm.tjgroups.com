@@ -331,12 +331,21 @@ export const LeadsPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest block mb-2">Contact Phone</label>
+                  <label className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest block mb-2">LinkedIn Profile URL</label>
                   <input 
-                    type="text" required value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})}
+                    type="url" value={formData.linkedin} onChange={e => setFormData({...formData, linkedin: e.target.value})}
                     className="w-full px-4 py-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] text-sm focus:outline-none focus:border-[#161616] transition-all" 
+                    placeholder="https://linkedin.com/in/..."
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest block mb-2">Contact Phone</label>
+                <input 
+                  type="text" required value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})}
+                  className="w-full px-4 py-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] text-sm focus:outline-none focus:border-[#161616] transition-all" 
+                />
               </div>
 
               {isManagement && (

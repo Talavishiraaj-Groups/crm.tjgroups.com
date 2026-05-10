@@ -227,6 +227,17 @@ export const LeadDetail: React.FC = () => {
                   <Phone className="w-3.5 h-3.5" /> {lead.phone}
                 </div>
               </div>
+              {lead.linkedin && (
+                <div className="group cursor-pointer">
+                  <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">LinkedIn Profile</p>
+                  <a 
+                    href={lead.linkedin} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-sm text-blue-600 font-medium hover:underline transition-all"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" /> Profile Link
+                  </a>
+                </div>
+              )}
               <div>
                 <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">Acquisition Date</p>
                 <div className="flex items-center gap-2 text-sm text-[#161616]/40 font-medium">
