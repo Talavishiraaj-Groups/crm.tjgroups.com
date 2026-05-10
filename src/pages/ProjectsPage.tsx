@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
 import { Project, Deal, ProjectStatus, User as UserType } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { LayoutGrid, List, Plus, Calendar, User } from 'lucide-center'; // Note: Lucide icons can sometimes be tricky with names, I'll use Lucide-react
 import { LayoutGrid as GridIcon, List as ListIcon, Plus as PlusIcon, Calendar as CalendarIcon, User as UserIcon } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
