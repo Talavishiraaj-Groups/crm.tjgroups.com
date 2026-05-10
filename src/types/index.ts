@@ -38,7 +38,10 @@ export type DealStatus = 'Open' | 'Won' | 'Lost';
 export interface Deal {
   id: string;
   leadId: string;
+  clientName?: string; // Cache for display
   ownerRepId: string;
+  setterId?: string;
+  closerId?: string;
   status: DealStatus;
   value: number;
   createdAt: string;

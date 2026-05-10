@@ -229,8 +229,8 @@ export const DealsPage: React.FC = () => {
                     <tr key={deal.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
                       <td className="px-5 py-3.5 text-xs font-mono text-[#161616]/40">#{deal.id.split('-')[0]}</td>
                       <td className="px-5 py-3.5 text-sm font-semibold text-[#161616]">{getLeadName(deal.leadId)}</td>
-                      <td className="px-5 py-3.5 text-xs text-[#161616]/60 font-medium">{getUsername(commission?.setterId || '—')}</td>
-                      <td className="px-5 py-3.5 text-xs text-[#161616]/60 font-medium">{getUsername(commission?.closerId || '—')}</td>
+                       <td className="px-5 py-3.5 text-xs text-[#161616]/60 font-medium">{getUsername(deal.setterId || commission?.setterId || '—')}</td>
+                       <td className="px-5 py-3.5 text-xs text-[#161616]/60 font-medium">{getUsername(deal.closerId || commission?.closerId || '—')}</td>
                       <td className="px-5 py-3.5 text-sm font-bold text-[#161616] tabular-nums">${Number(deal.value).toLocaleString()}</td>
                       <td className="px-5 py-3.5">
                         <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${getBadgeClass(deal.status)}`}>

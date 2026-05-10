@@ -25,13 +25,21 @@ export const ProjectsPage: React.FC = () => {
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
   const [isLoading, setIsLoading] = useState(true);
 
-  // New Project Modal
+  // Modals
   const [showModal, setShowModal] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  
   const [formData, setFormData] = useState({
     clientName: '', 
     dueDate: '', 
     startDate: new Date().toISOString().split('T')[0],
+    accountManagerId: '',
+    liaisonId: ''
+  });
+
+  const [editData, setEditData] = useState({
+    status: 'Onboarding' as ProjectStatus,
     accountManagerId: '',
     liaisonId: ''
   });
@@ -87,6 +95,26 @@ export const ProjectsPage: React.FC = () => {
     }
   };
 
+  const handleUpdateProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProject) return;
+    setIsSaving(true);
+    try {
+      await api.projects.update(editingProject.id, {
+        status: editData.status,
+        accountManagerId: editData.accountManagerId,
+        liaisonId: editData.liaisonId
+      });
+      setEditingProject(null);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to update project');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const isManagement = role === 'SUPER_ADMIN' || role === 'ADMIN';
 
   return (
@@ -129,12 +157,18 @@ export const ProjectsPage: React.FC = () => {
             </div>
             <form onSubmit={handleCreateProject} className="p-6 flex flex-col gap-4">
               <div>
-                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Client / Project Name</label>
-                <input 
-                  type="text" required value={formData.clientName} onChange={e => setFormData({...formData, clientName: e.target.value})}
-                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" 
-                  placeholder="e.g. Acme Corp Migration"
-                />
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Select Client (From Won Deals)</label>
+                <select 
+                  required value={formData.clientName} onChange={e => setFormData({...formData, clientName: e.target.value})}
+                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                >
+                  <option value="">— Select a Client —</option>
+                  {deals.map(d => (
+                    <option key={d.id} value={d.clientName || `Deal #${d.id}`}>
+                      {d.clientName || `Deal #${d.id}`}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -185,6 +219,56 @@ export const ProjectsPage: React.FC = () => {
             </form>
           </div>
         </div>
+      {editingProject && (
+        <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-[6px] border border-[#DFDFDF] w-full max-w-[400px] shadow-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-[#DFDFDF] flex justify-between items-center">
+              <h3 className="text-sm font-bold text-[#161616] uppercase tracking-widest">Edit Project: {editingProject.clientName}</h3>
+              <button onClick={() => setEditingProject(null)} className="text-[#161616]/30 hover:text-[#161616]">✕</button>
+            </div>
+            <form onSubmit={handleUpdateProject} className="p-6 flex flex-col gap-4">
+              <div>
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Status</label>
+                <select 
+                  value={editData.status} onChange={e => setEditData({...editData, status: e.target.value as any})}
+                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
+                >
+                  {STAGES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Account Manager</label>
+                  <select 
+                    disabled={!isManagement}
+                    value={editData.accountManagerId} onChange={e => setEditData({...editData, accountManagerId: e.target.value})}
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white disabled:bg-[#F9F9F9]"
+                  >
+                    <option value="">— Unassigned —</option>
+                    {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Sales Liaison</label>
+                  <select 
+                    disabled={!isManagement}
+                    value={editData.liaisonId} onChange={e => setEditData({...editData, liaisonId: e.target.value})}
+                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white disabled:bg-[#F9F9F9]"
+                  >
+                    <option value="">— Unassigned —</option>
+                    {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 mt-2">
+                <button type="button" onClick={() => setEditingProject(null)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
+                <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-5 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50">
+                  {isSaving ? 'SAVING...' : 'SAVE CHANGES'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {isLoading ? (
@@ -210,12 +294,18 @@ export const ProjectsPage: React.FC = () => {
                   {stageProjects.length === 0 ? (
                     <div className="flex-1 flex items-center justify-center text-[11px] text-[#161616]/20 italic py-8">No projects</div>
                   ) : (
-                    stageProjects.map((project) => (
                       <div
                         key={project.id}
-                        className="bg-white border border-[#DFDFDF] rounded-[6px] p-4 cursor-pointer hover:border-[#161616]/20 hover:shadow-sm transition-all"
+                        onClick={() => {
+                          setEditingProject(project);
+                          setEditData({ status: project.status, accountManagerId: project.accountManagerId || '', liaisonId: project.liaisonId || '' });
+                        }}
+                        className="bg-white border border-[#DFDFDF] rounded-[6px] p-4 cursor-pointer hover:border-[#161616]/20 hover:shadow-sm transition-all group"
                       >
-                        <h4 className="text-sm font-bold text-[#161616] mb-3">{project.clientName}</h4>
+                        <div className="flex justify-between items-start mb-3">
+                          <h4 className="text-sm font-bold text-[#161616]">{project.clientName}</h4>
+                          <MoreVertical className="w-4 h-4 text-[#161616]/10 group-hover:text-[#161616]/40" />
+                        </div>
                         <div className="flex items-center gap-2 text-[11px] text-[#161616]/40 mb-1">
                           <CalendarIcon className="w-3 h-3" />
                           Due {new Date(project.dueDate).toLocaleDateString()}
@@ -259,7 +349,10 @@ export const ProjectsPage: React.FC = () => {
                 projects.map((project) => {
                   const stageConfig = STAGES.find((s) => s.key === project.status);
                   return (
-                    <tr key={project.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors">
+                    <tr key={project.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors cursor-pointer" onClick={() => {
+                      setEditingProject(project);
+                      setEditData({ status: project.status, accountManagerId: project.accountManagerId || '', liaisonId: project.liaisonId || '' });
+                    }}>
                       <td className="px-5 py-3.5 text-sm font-semibold text-[#161616]">{project.clientName}</td>
                       <td className="px-5 py-3.5">
                         <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${STATUS_BADGE[project.status]}`}>

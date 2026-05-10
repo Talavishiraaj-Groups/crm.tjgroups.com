@@ -85,9 +85,12 @@ export const api = {
       await fetchAPI('updateLead', 'POST', sheetPayload);
     },
     convertToDeal: async (leadId: string, userId: string, value: number): Promise<Deal> => {
+      const lead = await api.leads.getById(leadId);
       const deal = await api.deals.create({
         leadId: leadId,
         ownerRepId: userId,
+        setterId: lead?.ownerRepId || userId,
+        closerId: userId,
         status: 'Open',
         value: value
       });
@@ -110,8 +113,16 @@ export const api = {
         if (!Array.isArray(data)) return [];
         
         let deals = data.map((r: any) => ({
-          id: String(r.ID || ''), leadId: r.LeadId || '', value: Number(r.Value || 0), status: r.Status || 'Open', 
-          ownerRepId: r.OwnerRepId || '', createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
+          id: String(r.ID || ''), 
+          leadId: r.LeadId || '', 
+          clientName: r.ClientName || '',
+          value: Number(r.Value || 0), 
+          status: r.Status || 'Open', 
+          ownerRepId: r.OwnerRepId || '',
+          setterId: r.SetterId || '',
+          closerId: r.CloserId || '',
+          createdAt: r.CreatedAt || '', 
+          updatedAt: r.UpdatedAt || ''
         })) as Deal[];
         
         if (role === 'SALES_REP') deals = deals.filter(d => d.ownerRepId === userId);
@@ -122,7 +133,12 @@ export const api = {
     },
     create: async (payload: Partial<Deal>): Promise<Deal> => {
       const sheetPayload = {
-        LeadId: payload.leadId, Value: payload.value, Status: payload.status, OwnerRepId: payload.ownerRepId
+        LeadId: payload.leadId, 
+        Value: payload.value, 
+        Status: payload.status, 
+        OwnerRepId: payload.ownerRepId,
+        SetterId: payload.setterId,
+        CloserId: payload.closerId
       };
       const res = await fetchAPI('createDeal', 'POST', sheetPayload);
       return { 

@@ -294,14 +294,14 @@ export const AdminPage: React.FC = () => {
                 requests.map((r) => {
                   const lead = leads.find(l => l.id === r.relatedDealId);
                   return (
-                    <tr key={r.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9]">
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-2">
-                          {r.type === 'payment' ? <DollarSign className="w-3.5 h-3.5 text-[#161616]" /> : <FileText className="w-3.5 h-3.5 text-[#161616]" />}
-                          <span className="text-xs font-bold uppercase text-[#161616] tracking-wider">{r.type}</span>
-                        </div>
+                      <td className="px-5 py-3.5 text-sm font-medium text-[#161616]">
+                        {(() => {
+                          const deal = deals.find(d => d.id === r.relatedDealId);
+                          const leadId = deal ? deal.leadId : r.relatedDealId;
+                          const lead = leads.find(l => l.id === leadId);
+                          return lead?.name || r.relatedDealId;
+                        })()}
                       </td>
-                      <td className="px-5 py-3.5 text-sm font-medium text-[#161616]">{lead?.name || r.relatedDealId}</td>
                       <td className="px-5 py-3.5 text-sm text-[#161616]/60 font-semibold">{getUsername(r.requestedBy)}</td>
                       <td className="px-5 py-3.5">
                         <span className={`px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase tracking-wider ${r.status === 'Pending' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
@@ -395,6 +395,44 @@ export const AdminPage: React.FC = () => {
               <div className="flex justify-end gap-2 mt-4">
                 <button type="button" onClick={() => setEditingRequest(null)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
                 <button type="submit" disabled={isSubmitting} className="bg-[#161616] text-white px-6 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50 uppercase tracking-widest">UPDATE REQUEST</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* User Edit Modal */}
+      {editingUser && (
+        <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-[6px] shadow-xl border border-[#DFDFDF] w-full max-w-[400px] overflow-hidden">
+            <div className="flex justify-between items-center px-6 py-4 border-b border-[#DFDFDF]">
+              <h3 className="text-[12px] font-black text-[#161616] uppercase tracking-widest">Edit User: {editingUser.username}</h3>
+              <button onClick={() => setEditingUser(null)} className="text-[#161616]/30 hover:text-[#161616]"><X className="w-4 h-4" /></button>
+            </div>
+            <form onSubmit={handleEditUser} className="p-6 flex flex-col gap-4">
+              <div>
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Username</label>
+                <input type="text" required value={editingUser.username} onChange={e => setEditingUser({...editingUser, username: e.target.value})} className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Role</label>
+                <select value={editingUser.role} onChange={e => setEditingUser({...editingUser, role: e.target.value as UserRole})} className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white">
+                  {availableRoles.map(r => (
+                    <option key={r} value={r}>{ROLE_LABEL[r]}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Team / Team Lead</label>
+                <input type="text" value={editingUser.team || ''} onChange={e => setEditingUser({...editingUser, team: e.target.value})} className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Update Password</label>
+                <input type="text" value={editingUser.password || ''} onChange={e => setEditingUser({...editingUser, password: e.target.value})} placeholder="Leave blank to keep current" className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" />
+              </div>
+              <div className="flex justify-end gap-2 mt-4">
+                <button type="button" onClick={() => setEditingUser(null)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
+                <button type="submit" disabled={isSubmitting} className="bg-[#161616] text-white px-6 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50 uppercase tracking-widest">SAVE CHANGES</button>
               </div>
             </form>
           </div>

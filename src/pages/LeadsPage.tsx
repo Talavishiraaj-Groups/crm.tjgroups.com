@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/services';
 import { Lead, User } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Search, Filter, User as UserIcon, Calendar, Mail, Phone, ChevronRight } from 'lucide-react';
+import { Plus, Search, Filter, User as UserIcon, Calendar, Mail, Phone, ChevronRight, DollarSign, FileText } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
 export const LeadsPage: React.FC = () => {
@@ -15,6 +15,10 @@ export const LeadsPage: React.FC = () => {
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<string>('All');
   
+  // Quick Actions
+  const [selectedLeadForConvert, setSelectedLeadForConvert] = useState<Lead | null>(null);
+  const [dealValue, setDealValue] = useState(0);
+
   // New Lead Modal
   const [showModal, setShowModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -46,6 +50,40 @@ export const LeadsPage: React.FC = () => {
       setFormData(prev => ({ ...prev, ownerRepId: user.id }));
     }
   }, [user]);
+
+  const handleQuickConvert = async () => {
+    if (!selectedLeadForConvert || !user || !dealValue) return;
+    setIsSaving(true);
+    try {
+      await api.leads.convertToDeal(selectedLeadForConvert.id, user.id, dealValue);
+      setSelectedLeadForConvert(null);
+      fetchData();
+      alert('Converted successfully!');
+    } catch (err) {
+      console.error(err);
+      alert('Conversion failed.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleQuickRequest = async (leadId: string, type: 'payment' | 'paperwork') => {
+    if (!user) return;
+    try {
+      await api.adminRequests.create({
+        type,
+        relatedDealId: leadId,
+        requestedBy: user.id,
+        status: 'Pending',
+        notes: `Quick Request from Leads Page`
+      });
+      alert(`Request sent successfully!`);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert('Request failed.');
+    }
+  };
 
   const handleCreateLead = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,7 +173,7 @@ export const LeadsPage: React.FC = () => {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-[#DFDFDF] bg-[#F9F9F9]">
-                {['Client Details', 'Assigned Rep', 'Lifecycle Stage', 'Creation Date', ''].map((h) => (
+                {['Client Details', 'Assigned Rep', 'Lifecycle Stage', 'Creation Date', 'Quick Actions', ''].map((h) => (
                   <th key={h} className="text-left px-6 py-4 text-[9px] font-black text-[#161616]/40 uppercase tracking-[0.2em]">
                     {h}
                   </th>
@@ -184,6 +222,39 @@ export const LeadsPage: React.FC = () => {
                         {new Date(lead.createdAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}
                       </div>
                     </td>
+                    <td className="px-6 py-5">
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        {lead.status !== 'Converted' && lead.status !== 'Closed' && (
+                          <button 
+                            onClick={() => {
+                              setSelectedLeadForConvert(lead);
+                              setDealValue(0);
+                            }}
+                            className="bg-[#161616] text-white px-2.5 py-1 rounded-[4px] text-[9px] font-black uppercase tracking-widest hover:opacity-90"
+                          >
+                            CONVERT
+                          </button>
+                        )}
+                        {lead.status !== 'Converted' && (
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => handleQuickRequest(lead.id, 'payment')}
+                              title="Request Payment"
+                              className="p-1.5 border border-[#DFDFDF] rounded-[4px] hover:bg-[#F9F9F9] text-[#161616]/40 hover:text-[#161616]"
+                            >
+                              <DollarSign className="w-3.5 h-3.5" />
+                            </button>
+                            <button 
+                              onClick={() => handleQuickRequest(lead.id, 'paperwork')}
+                              title="Request Paperwork"
+                              className="p-1.5 border border-[#DFDFDF] rounded-[4px] hover:bg-[#F9F9F9] text-[#161616]/40 hover:text-[#161616]"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-6 py-5 text-right">
                       <ChevronRight className="w-4 h-4 text-[#161616]/10 group-hover:text-[#161616] transition-all ml-auto" />
                     </td>
@@ -192,6 +263,38 @@ export const LeadsPage: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Quick Conversion Modal */}
+      {selectedLeadForConvert && (
+        <div className="fixed inset-0 bg-[#161616]/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-[12px] border border-[#DFDFDF] w-full max-w-[400px] shadow-2xl overflow-hidden">
+            <div className="px-8 py-5 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9]">
+              <h3 className="text-[10px] font-black text-[#161616] uppercase tracking-[0.25em]">Convert Lead: {selectedLeadForConvert.name}</h3>
+              <button onClick={() => setSelectedLeadForConvert(null)} className="text-[#161616]/20 hover:text-[#161616]">✕</button>
+            </div>
+            <div className="p-8 flex flex-col gap-6">
+              <div>
+                <label className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest block mb-2">Deal Value ($)</label>
+                <input 
+                  type="number" required value={dealValue || ''} onChange={e => setDealValue(Number(e.target.value))}
+                  className="w-full px-4 py-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] text-sm focus:outline-none focus:border-[#161616] font-bold" 
+                  placeholder="Enter value..."
+                />
+              </div>
+              <div className="flex justify-end gap-3 mt-2">
+                <button onClick={() => setSelectedLeadForConvert(null)} className="px-6 py-3 text-[11px] font-black text-[#161616]/40 hover:text-[#161616] uppercase tracking-widest">CANCEL</button>
+                <button 
+                  onClick={handleQuickConvert}
+                  disabled={isSaving || !dealValue}
+                  className="bg-[#161616] text-white px-8 py-3 rounded-[6px] text-[11px] font-black hover:opacity-90 disabled:opacity-20 uppercase tracking-[0.2em] shadow-xl"
+                >
+                  {isSaving ? 'CONVERTING...' : 'CONFIRM CONVERSION'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
