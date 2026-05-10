@@ -13,7 +13,7 @@ import { ROLE_BADGE, ROLE_LABEL, AVAIL_DOT } from '../utils/badges';
 import { Log } from '../types';
 
 export const AdminPage: React.FC = () => {
-  const { role: currentUserRole } = useAuth();
+  const { role: currentUserRole, user } = useAuth();
   const navigate = useNavigate();
   const [allUsers, setAllUsers] = useState<User[]>([]); 
   const [displayUsers, setDisplayUsers] = useState<User[]>([]); 
@@ -372,15 +372,14 @@ export const AdminPage: React.FC = () => {
                   />
                   <button 
                     onClick={async () => {
-                      if (!dailyNote.trim()) return;
+                      if (!dailyNote.trim() || !user) return;
                       setIsLoggingDaily(true);
                       try {
-                        const adminId = currentUserRole === 'SUPER_ADMIN' ? 'super_admin' : 'team_lead'; // simplified for admin page
                         await api.logs.create({
-                          entityId: 'USER_' + adminId,
+                          entityId: 'USER_' + user.id,
                           entityType: 'User',
                           action: 'DAILY_LOG',
-                          userId: adminId,
+                          userId: user.id,
                           details: `DAILY SUMMARY: ${dailyNote}`
                         });
                         setDailyNote('');

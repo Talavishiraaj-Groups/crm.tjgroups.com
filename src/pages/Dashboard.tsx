@@ -172,8 +172,8 @@ export const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Activity & Log Section */}
         <div className="lg:col-span-2 flex flex-col gap-6">
-          {/* Daily Summary Box (For Sales Reps) */}
-          {isSalesRep && (
+          {/* Daily Summary Box (For Everyone) */}
+          {user && (
             <div className={`rounded-[8px] p-6 border transition-all ${hasLoggedToday ? 'bg-[#F9F9F9] border-[#DFDFDF]' : 'bg-[#161616] border-[#161616] shadow-2xl'}`}>
               <div className="flex justify-between items-center mb-5">
                 <div className="flex items-center gap-3">
