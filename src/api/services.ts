@@ -44,6 +44,7 @@ export const api = {
         let leads = data.map((r: any) => ({
           id: String(r.ID || ''), name: r.Name || 'Unknown', email: r.Email || '', phone: r.Phone || '',
           linkedin: r.Linkedin || '',
+          setterId: r.SetterId || '', closerId: r.CloserId || '',
           status: r.Status || 'New', ownerRepId: r.OwnerRepId || '', notes: r.Notes || '',
           createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
         })) as Lead[];
@@ -60,6 +61,7 @@ export const api = {
       return {
         id: String(data.ID || ''), name: data.Name || 'Unknown', email: data.Email || '', phone: data.Phone || '',
         linkedin: data.Linkedin || '',
+        setterId: data.SetterId || '', closerId: data.CloserId || '',
         status: data.Status || 'New', ownerRepId: data.OwnerRepId || '', notes: data.Notes || '',
         createdAt: data.CreatedAt || '', updatedAt: data.UpdatedAt || ''
       } as Lead;
@@ -67,12 +69,14 @@ export const api = {
     create: async (payload: Partial<Lead>): Promise<Lead> => {
       const sheetPayload = {
         Name: payload.name, Email: payload.email, Phone: payload.phone, Linkedin: payload.linkedin,
-        Status: payload.status, OwnerRepId: payload.ownerRepId, Notes: payload.notes
+        Status: payload.status, OwnerRepId: payload.ownerRepId, Notes: payload.notes,
+        SetterId: payload.setterId, CloserId: payload.closerId
       };
       const res = await fetchAPI('createLead', 'POST', sheetPayload);
       return {
         id: res.ID, name: res.Name, email: res.Email, phone: res.Phone, linkedin: res.Linkedin,
         status: res.Status, ownerRepId: res.OwnerRepId, notes: res.Notes,
+        setterId: res.SetterId, closerId: res.CloserId,
         createdAt: res.CreatedAt, updatedAt: res.UpdatedAt
       } as Lead;
     },
@@ -82,6 +86,8 @@ export const api = {
       if (payload.notes) sheetPayload.Notes = payload.notes;
       if (payload.name) sheetPayload.Name = payload.name;
       if (payload.linkedin) sheetPayload.Linkedin = payload.linkedin;
+      if (payload.setterId) sheetPayload.SetterId = payload.setterId;
+      if (payload.closerId) sheetPayload.CloserId = payload.closerId;
       await fetchAPI('updateLead', 'POST', sheetPayload);
     },
     convertToDeal: async (leadId: string, userId: string, value: number): Promise<Deal> => {
@@ -341,7 +347,9 @@ export const api = {
   logs: {
     getByEntity: async (entityId: string): Promise<Log[]> => {
       try {
-        const data = await fetchAPI('getLogs', 'GET', null, { id: entityId });
+        // If entityId is GLOBAL, we fetch all logs without ID param
+        const params = entityId === 'GLOBAL' ? {} : { id: entityId };
+        const data = await fetchAPI('getLogs', 'GET', null, params);
         if (!Array.isArray(data)) return [];
         
         return data.map((r: any) => ({

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
 import { Project, Deal, ProjectStatus, User as UserType } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { LayoutGrid as GridIcon, List as ListIcon, Plus as PlusIcon, Calendar as CalendarIcon, User as UserIcon } from 'lucide-react';
+import { LayoutGrid as GridIcon, List as ListIcon, Plus as PlusIcon, Calendar as CalendarIcon, User as UserIcon, MoreVertical, Send, MessageSquare } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
 const STAGES: { key: ProjectStatus; label: string; pct: number }[] = [
@@ -28,6 +28,8 @@ export const ProjectsPage: React.FC = () => {
   // Modals
   const [showModal, setShowModal] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [projectLogs, setProjectLogs] = useState<any[]>([]);
+  const [newLog, setNewLog] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   
   const [formData, setFormData] = useState({
@@ -57,6 +59,15 @@ export const ProjectsPage: React.FC = () => {
         setUsers(uData);
         setIsLoading(false);
       });
+    }
+  };
+
+  const fetchProjectLogs = async (projectId: string) => {
+    try {
+      const logs = await api.logs.getByEntity(projectId);
+      setProjectLogs(logs || []);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -92,6 +103,24 @@ export const ProjectsPage: React.FC = () => {
       alert('Failed to create project');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleAddProjectLog = async () => {
+    if (!newLog.trim() || !editingProject || !user) return;
+    try {
+      await api.logs.create({
+        entityId: editingProject.id,
+        entityType: 'Project',
+        action: 'UPDATE',
+        userId: user.id,
+        details: newLog
+      });
+      setNewLog('');
+      fetchProjectLogs(editingProject.id);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to add update');
     }
   };
 
@@ -220,53 +249,95 @@ export const ProjectsPage: React.FC = () => {
           </div>
         </div>
       {editingProject && (
-        <div className="fixed inset-0 bg-[#161616]/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[6px] border border-[#DFDFDF] w-full max-w-[400px] shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#DFDFDF] flex justify-between items-center">
-              <h3 className="text-sm font-bold text-[#161616] uppercase tracking-widest">Edit Project: {editingProject.clientName}</h3>
+        <div className="fixed inset-0 bg-[#161616]/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-[12px] border border-[#DFDFDF] w-full max-w-[850px] shadow-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9]">
+              <h3 className="text-[11px] font-black text-[#161616] uppercase tracking-[0.2em]">Project Environment: {editingProject.clientName}</h3>
               <button onClick={() => setEditingProject(null)} className="text-[#161616]/30 hover:text-[#161616]">✕</button>
             </div>
-            <form onSubmit={handleUpdateProject} className="p-6 flex flex-col gap-4">
-              <div>
-                <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Status</label>
-                <select 
-                  value={editData.status} onChange={e => setEditData({...editData, status: e.target.value as any})}
-                  className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
-                >
-                  {STAGES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col lg:grid lg:grid-cols-2">
+              <form onSubmit={handleUpdateProject} className="p-6 flex flex-col gap-5 border-b lg:border-b-0 lg:border-r border-[#DFDFDF]">
+                <h4 className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest mb-1">Status & Ownership</h4>
                 <div>
-                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Account Manager</label>
+                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1.5">Lifecycle Stage</label>
                   <select 
-                    disabled={!isManagement}
-                    value={editData.accountManagerId} onChange={e => setEditData({...editData, accountManagerId: e.target.value})}
-                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white disabled:bg-[#F9F9F9]"
+                    value={editData.status} onChange={e => setEditData({...editData, status: e.target.value as any})}
+                    className="w-full px-4 py-2.5 border border-[#DFDFDF] rounded-[6px] text-sm focus:outline-none focus:border-[#161616] bg-white font-bold"
                   >
-                    <option value="">— Unassigned —</option>
-                    {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                    {STAGES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Sales Liaison</label>
-                  <select 
-                    disabled={!isManagement}
-                    value={editData.liaisonId} onChange={e => setEditData({...editData, liaisonId: e.target.value})}
-                    className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white disabled:bg-[#F9F9F9]"
+                <div className="grid grid-cols-1 gap-4">
+                  <div>
+                    <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1.5">Account Manager</label>
+                    <select 
+                      disabled={!isManagement}
+                      value={editData.accountManagerId} onChange={e => setEditData({...editData, accountManagerId: e.target.value})}
+                      className="w-full px-4 py-2.5 border border-[#DFDFDF] rounded-[6px] text-sm focus:outline-none focus:border-[#161616] bg-white disabled:bg-[#F9F9F9] font-bold"
+                    >
+                      <option value="">— Unassigned —</option>
+                      {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1.5">Sales Liaison</label>
+                    <select 
+                      disabled={!isManagement}
+                      value={editData.liaisonId} onChange={e => setEditData({...editData, liaisonId: e.target.value})}
+                      className="w-full px-4 py-2.5 border border-[#DFDFDF] rounded-[6px] text-sm focus:outline-none focus:border-[#161616] bg-white disabled:bg-[#F9F9F9] font-bold"
+                    >
+                      <option value="">— Unassigned —</option>
+                      {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-[#DFDFDF]">
+                  <button type="button" onClick={() => setEditingProject(null)} className="px-5 py-2.5 text-[11px] font-black text-[#161616]/30 hover:text-[#161616] uppercase tracking-widest">CANCEL</button>
+                  <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-7 py-2.5 rounded-[6px] text-[11px] font-black hover:opacity-90 disabled:opacity-50 uppercase tracking-widest shadow-lg">
+                    {isSaving ? 'SAVING...' : 'COMMIT CHANGES'}
+                  </button>
+                </div>
+              </form>
+
+              {/* Interaction Logs Column */}
+              <div className="bg-[#F9F9F9] p-6 flex flex-col gap-5 h-full min-h-[400px]">
+                <h4 className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest flex items-center gap-2">
+                  <MessageSquare className="w-3.5 h-3.5" /> Project Communication Feed
+                </h4>
+                
+                <div className="flex-1 overflow-y-auto max-h-[250px] flex flex-col gap-4 pr-2">
+                  {projectLogs.length === 0 ? (
+                    <div className="text-[11px] text-[#161616]/30 italic py-10 text-center border border-dashed border-[#DFDFDF] rounded-[6px]">No updates recorded for this project.</div>
+                  ) : (
+                    projectLogs.slice().reverse().map(log => (
+                      <div key={log.id} className="bg-white border border-[#DFDFDF] rounded-[6px] p-3 shadow-sm">
+                        <div className="flex justify-between items-baseline mb-1">
+                          <span className="text-[9px] font-black text-[#161616]/20 uppercase tracking-tighter">@{usersList.find(u => u.id === log.userId)?.username || log.userId}</span>
+                          <span className="text-[8px] font-mono text-[#161616]/20">{new Date(log.timestamp).toLocaleString()}</span>
+                        </div>
+                        <p className="text-xs text-[#161616]/70 leading-relaxed font-medium">{log.details}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="mt-auto flex flex-col gap-3">
+                  <textarea 
+                    value={newLog} onChange={e => setNewLog(e.target.value)}
+                    placeholder="Type a summary or checkpoint update..."
+                    className="w-full bg-white border border-[#DFDFDF] rounded-[6px] p-3 text-xs focus:outline-none focus:border-[#161616]/30 resize-none min-h-[80px]"
+                  />
+                  <button 
+                    onClick={handleAddProjectLog} disabled={!newLog.trim()}
+                    className="flex items-center justify-center gap-2 bg-[#161616] text-white py-2.5 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90 disabled:opacity-20"
                   >
-                    <option value="">— Unassigned —</option>
-                    {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
-                  </select>
+                    <Send className="w-3.5 h-3.5" /> ADD UPDATE
+                  </button>
                 </div>
               </div>
-              <div className="flex justify-end gap-2 mt-2">
-                <button type="button" onClick={() => setEditingProject(null)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>
-                <button type="submit" disabled={isSaving} className="bg-[#161616] text-white px-5 py-2 rounded-[4px] text-xs font-bold hover:opacity-90 disabled:opacity-50">
-                  {isSaving ? 'SAVING...' : 'SAVE CHANGES'}
-                </button>
-              </div>
-            </form>
+            </div>
+          </div>
+        </div>
           </div>
         </div>
       )}
@@ -299,6 +370,7 @@ export const ProjectsPage: React.FC = () => {
                         onClick={() => {
                           setEditingProject(project);
                           setEditData({ status: project.status, accountManagerId: project.accountManagerId || '', liaisonId: project.liaisonId || '' });
+                          fetchProjectLogs(project.id);
                         }}
                         className="bg-white border border-[#DFDFDF] rounded-[6px] p-4 cursor-pointer hover:border-[#161616]/20 hover:shadow-sm transition-all group"
                       >

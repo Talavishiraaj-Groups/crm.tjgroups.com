@@ -55,11 +55,12 @@ export const Dashboard: React.FC = () => {
       setPendingRequests(requests.filter(r => r.status === 'Pending'));
 
       try {
+        // Fetch all logs to check for daily summary
         const logs = await api.logs.getByEntity('GLOBAL');
         const sortedLogs = (logs || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         setRecentLogs(sortedLogs);
         
-        // Check if user has logged today
+        // Check if user has logged today (DAILY_LOG)
         const today = new Date().toDateString();
         const loggedToday = sortedLogs.some(l => 
           l.action === 'DAILY_LOG' && 

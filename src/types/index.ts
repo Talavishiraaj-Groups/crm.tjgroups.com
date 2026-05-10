@@ -25,6 +25,8 @@ export interface Lead {
   linkedin?: string;
   assignedSetter?: string;
   assignedCloser?: string;
+  setterId?: string; // Standardized ID
+  closerId?: string; // Standardized ID
   status: LeadStatus;
   cost?: number;
   notes: string;
@@ -78,6 +80,7 @@ export interface Project {
   startDate: string;
   dueDate: string;
   notes?: string;
+  logs?: Log[];
 }
 
 export interface Log {

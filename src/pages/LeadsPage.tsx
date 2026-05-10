@@ -173,7 +173,7 @@ export const LeadsPage: React.FC = () => {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-[#DFDFDF] bg-[#F9F9F9]">
-                {['Client Details', 'Assigned Rep', 'Lifecycle Stage', 'Creation Date', 'Quick Actions', ''].map((h) => (
+                {['Client Details', 'Setter / Closer', 'Lifecycle Stage', 'Creation Date', 'Quick Actions', ''].map((h) => (
                   <th key={h} className="text-left px-6 py-4 text-[9px] font-black text-[#161616]/40 uppercase tracking-[0.2em]">
                     {h}
                   </th>
@@ -206,9 +206,15 @@ export const LeadsPage: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-5">
-                      <div className="flex items-center gap-2.5 text-[11px] text-[#161616]/60 font-bold uppercase tracking-wider">
-                        <div className="w-1.5 h-1.5 rounded-full bg-[#161616]/20"></div>
-                        {getUsername(lead.ownerRepId)}
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-2 text-[10px] text-[#161616]/60 font-bold uppercase tracking-wider">
+                          <span className="text-[8px] text-[#161616]/20">SET:</span> {getUsername(lead.setterId || lead.ownerRepId)}
+                        </div>
+                        {lead.closerId && (
+                          <div className="flex items-center gap-2 text-[10px] text-[#161616]/60 font-bold uppercase tracking-wider">
+                            <span className="text-[8px] text-[#161616]/20">CLS:</span> {getUsername(lead.closerId)}
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-5">

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { User, UserRole, Lead, Deal, AdminRequest } from '../types';
 import { api } from '../api/services';
 import { useAuth } from '../context/AuthContext';
@@ -11,6 +12,7 @@ import { ROLE_BADGE, ROLE_LABEL, AVAIL_DOT } from '../utils/badges';
 
 export const AdminPage: React.FC = () => {
   const { role: currentUserRole } = useAuth();
+  const navigate = useNavigate();
   const [allUsers, setAllUsers] = useState<User[]>([]); 
   const [displayUsers, setDisplayUsers] = useState<User[]>([]); 
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -38,11 +40,7 @@ export const AdminPage: React.FC = () => {
     ]).then(([usersData, leadsData, dealsData, requestsData]) => {
       setAllUsers(usersData);
       
-      let filteredUsers = usersData;
-      if (currentUserRole === 'ADMIN') {
-        filteredUsers = usersData.filter(u => u.role !== 'SUPER_ADMIN');
-      }
-      setDisplayUsers(filteredUsers);
+      setDisplayUsers(usersData); // Always show all users to Admin/SuperAdmin for oversight
       setLeads(leadsData);
       setDeals(dealsData);
       setRequests(requestsData);
@@ -89,7 +87,7 @@ export const AdminPage: React.FC = () => {
     e.preventDefault();
     if (!editingUser) return;
     if (currentUserRole === 'ADMIN' && editingUser.role === 'SUPER_ADMIN') {
-      alert("Security Error: You cannot grant Super Admin privileges.");
+      alert("Security Error: Admins cannot promote to Super Admin.");
       return;
     }
 
@@ -328,35 +326,57 @@ export const AdminPage: React.FC = () => {
           </table>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="flex flex-col gap-6">
           <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden">
             <div className="px-5 py-4 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9]">
-              <h3 className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest flex items-center gap-2"><UsersIcon className="w-3.5 h-3.5" /> Global Leads</h3>
+              <h3 className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest flex items-center gap-2"><LayoutGrid className="w-3.5 h-3.5" /> Lead & Setter Assignments</h3>
+              <p className="text-[9px] font-bold text-[#161616]/20 uppercase">Transition leads between Setters and Closers</p>
             </div>
-            <div className="max-h-[500px] overflow-y-auto">
+            <div className="overflow-x-auto">
               <table className="w-full border-collapse">
+                <thead>
+                  <tr className="border-b border-[#DFDFDF] bg-[#F9F9F9]">
+                    {['Lead Name', 'Original Setter', 'Assigned Closer', 'Actions'].map(h => (
+                      <th key={h} className="text-left px-5 py-3 text-[9px] font-black text-[#161616]/40 uppercase tracking-widest">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
                 <tbody>
-                  {leads.map(l => (
-                    <tr key={l.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9]">
-                      <td className="px-5 py-3 text-sm font-medium text-[#161616]">{l.name}</td>
-                      <td className="px-5 py-3 text-xs text-[#161616]/60 font-semibold">{getUsername(l.ownerRepId)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden">
-            <div className="px-5 py-4 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9]">
-              <h3 className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest flex items-center gap-2"><Briefcase className="w-3.5 h-3.5" /> Global Deals</h3>
-            </div>
-            <div className="max-h-[500px] overflow-y-auto">
-              <table className="w-full border-collapse">
-                <tbody>
-                  {deals.map(d => (
-                    <tr key={d.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9]">
-                      <td className="px-5 py-3 text-sm font-medium text-[#161616] truncate max-w-[120px]">{leads.find(l => l.id === d.leadId)?.name || 'Unknown'}</td>
-                      <td className="px-5 py-3 text-xs text-[#161616]/60">{getUsername(d.ownerRepId)}</td>
+                  {leads.filter(l => l.status !== 'Converted').map(l => (
+                    <tr key={l.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-all">
+                      <td className="px-5 py-4 text-sm font-bold text-[#161616]">{l.name}</td>
+                      <td className="px-5 py-4">
+                        <select 
+                          value={l.setterId || l.ownerRepId} 
+                          onChange={async (e) => {
+                            await api.leads.update(l.id, { setterId: e.target.value });
+                            fetchData();
+                          }}
+                          className="text-xs bg-transparent border-0 font-semibold focus:ring-0 cursor-pointer"
+                        >
+                          {allUsers.filter(u => u.role === 'SETTER' || u.role === 'SALES_REP').map(u => (
+                            <option key={u.id} value={u.id}>{u.username}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-5 py-4">
+                        <select 
+                          value={l.closerId || ''} 
+                          onChange={async (e) => {
+                            await api.leads.update(l.id, { closerId: e.target.value });
+                            fetchData();
+                          }}
+                          className="text-xs bg-transparent border-0 font-semibold focus:ring-0 cursor-pointer"
+                        >
+                          <option value="">No Closer Assigned</option>
+                          {allUsers.filter(u => u.role === 'SALES_REP').map(u => (
+                            <option key={u.id} value={u.id}>{u.username}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-5 py-4 text-right">
+                        <button onClick={() => navigate(`/leads/${l.id}`)} className="text-[9px] font-black text-[#161616]/40 hover:text-[#161616] uppercase tracking-widest transition-all">VIEW DETAIL</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
