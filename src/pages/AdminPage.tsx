@@ -6,9 +6,11 @@ import { useAuth } from '../context/AuthContext';
 import { 
   UserPlus, Search, MoreVertical, CheckCircle, XCircle, X, 
   LayoutGrid, Users as UsersIcon, Briefcase, ShieldAlert, 
-  Trash2, Bell, ExternalLink, FileText, DollarSign, Clock
+  Trash2, Bell, ExternalLink, FileText, DollarSign, Clock,
+  ClipboardCheck, MessageSquare, History
 } from 'lucide-react';
 import { ROLE_BADGE, ROLE_LABEL, AVAIL_DOT } from '../utils/badges';
+import { Log } from '../types';
 
 export const AdminPage: React.FC = () => {
   const { role: currentUserRole } = useAuth();
@@ -20,7 +22,11 @@ export const AdminPage: React.FC = () => {
   const [requests, setRequests] = useState<AdminRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'users' | 'assignments' | 'requests'>('users');
+  const [tab, setTab] = useState<'users' | 'assignments' | 'requests' | 'summaries'>('users');
+  const [logs, setLogs] = useState<Log[]>([]);
+  const [dailyNote, setDailyNote] = useState('');
+  const [isLoggingDaily, setIsLoggingDaily] = useState(false);
+  const [hasLoggedToday, setHasLoggedToday] = useState(false);
   
   // Modal state
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -47,6 +53,18 @@ export const AdminPage: React.FC = () => {
       setLeads(leadsData);
       setDeals(dealsData);
       setRequests(requestsData);
+      
+      api.logs.getByEntity('GLOBAL').then(logsData => {
+        setLogs(logsData);
+        const today = new Date().toDateString();
+        const loggedToday = logsData.some(l => 
+          l.userId === (currentUserRole === 'SUPER_ADMIN' ? 'super_admin' : 'team_lead') && 
+          l.action === 'DAILY_LOG' && 
+          new Date(l.timestamp).toDateString() === today
+        );
+        setHasLoggedToday(loggedToday);
+      });
+      
       setIsLoading(false);
     }).catch(err => {
       console.error(err);
@@ -194,11 +212,14 @@ export const AdminPage: React.FC = () => {
             >
               <Bell className="w-3.5 h-3.5" /> REQUESTS {requests.filter(r => r.status === 'Pending').length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>}
             </button>
-            <button 
-              onClick={() => setTab('assignments')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-[4px] text-[10px] font-bold uppercase tracking-wider transition-all ${tab === 'assignments' ? 'bg-white shadow-sm text-[#161616]' : 'text-[#161616]/40 hover:text-[#161616]/60'}`}
             >
               <LayoutGrid className="w-3.5 h-3.5" /> ASSIGNMENTS
+            </button>
+            <button 
+              onClick={() => setTab('summaries')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-[4px] text-[10px] font-bold uppercase tracking-wider transition-all ${tab === 'summaries' ? 'bg-white shadow-sm text-[#161616]' : 'text-[#161616]/40 hover:text-[#161616]/60'}`}
+            >
+              <ClipboardCheck className="w-3.5 h-3.5" /> DAILY LOGS
             </button>
           </div>
           {tab === 'users' && (
@@ -332,6 +353,105 @@ export const AdminPage: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+      ) : tab === 'summaries' ? (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="md:col-span-1 space-y-6">
+            <div className="bg-[#161616] rounded-[6px] p-6 text-white shadow-xl">
+              <h3 className="text-[10px] font-black text-white/30 uppercase tracking-[0.2em] mb-4">My Daily Contribution</h3>
+              {!hasLoggedToday ? (
+                <div className="space-y-4">
+                  <textarea 
+                    placeholder="Briefly state your key achievements today..."
+                    className="w-full bg-white/5 border border-white/10 rounded-[4px] p-3 text-sm font-medium focus:outline-none focus:border-white/20 transition-all resize-none text-white h-32"
+                    value={dailyNote}
+                    onChange={(e) => setDailyNote(e.target.value)}
+                  />
+                  <button 
+                    onClick={async () => {
+                      if (!dailyNote.trim()) return;
+                      setIsLoggingDaily(true);
+                      try {
+                        const adminId = currentUserRole === 'SUPER_ADMIN' ? 'super_admin' : 'team_lead'; // simplified for admin page
+                        await api.logs.create({
+                          entityId: 'USER_' + adminId,
+                          entityType: 'User',
+                          action: 'DAILY_LOG',
+                          userId: adminId,
+                          details: `DAILY SUMMARY: ${dailyNote}`
+                        });
+                        setDailyNote('');
+                        setHasLoggedToday(true);
+                        fetchData();
+                      } catch (err) {
+                        alert('Failed to submit summary.');
+                      } finally {
+                        setIsLoggingDaily(false);
+                      }
+                    }}
+                    disabled={isLoggingDaily || !dailyNote.trim()}
+                    className="w-full bg-white text-[#161616] py-3 rounded-[4px] text-xs font-black uppercase tracking-widest hover:bg-[#F9F9F9] transition-all disabled:opacity-50"
+                  >
+                    {isLoggingDaily ? 'SUBMITTING...' : 'LOG DAILY SUMMARY'}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center py-6 text-center">
+                  <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center text-green-500 mb-4">
+                    <CheckCircle className="w-6 h-6" />
+                  </div>
+                  <p className="text-sm font-bold text-white uppercase tracking-widest mb-1">Success</p>
+                  <p className="text-[10px] text-white/40 font-medium tracking-tight">Your administrative daily summary is logged.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="md:col-span-2 space-y-6">
+            <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden">
+              <div className="px-5 py-4 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9]">
+                <h3 className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest flex items-center gap-2"><History className="w-3.5 h-3.5" /> Team-wide Daily Summaries</h3>
+                <span className="text-[9px] font-bold text-[#161616]/20 uppercase">Today: {new Date().toLocaleDateString()}</span>
+              </div>
+              <div className="p-0 max-h-[600px] overflow-y-auto">
+                {(() => {
+                  const today = new Date().toDateString();
+                  const dailyLogs = logs.filter(l => l.action === 'DAILY_LOG' && new Date(l.timestamp).toDateString() === today);
+                  
+                  if (dailyLogs.length === 0) {
+                    return <div className="px-10 py-20 text-center text-[#161616]/30 italic text-sm">No summaries submitted today yet.</div>;
+                  }
+
+                  return dailyLogs.map(log => (
+                    <div key={log.id} className="p-5 border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-all">
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex items-center gap-3">
+                          <div className="w-7 h-7 rounded-full bg-[#161616] text-white flex items-center justify-center text-[10px] font-black uppercase">
+                            {log.userId[0]}
+                          </div>
+                          <div>
+                            <p className="text-xs font-black text-[#161616] uppercase tracking-tight">@{log.userId}</p>
+                            <p className="text-[9px] font-bold text-[#161616]/30 uppercase">
+                              {(() => {
+                                const user = allUsers.find(u => u.id === log.userId || u.username === log.userId);
+                                return user ? ROLE_LABEL[user.role] : 'Team Member';
+                              })()}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-mono text-[#161616]/20">{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <div className="pl-10">
+                        <div className="bg-white border border-[#DFDFDF] rounded-[4px] p-4">
+                          <p className="text-sm text-[#161616]/70 leading-relaxed font-medium">{log.details.replace('DAILY SUMMARY: ', '')}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </div>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-6">
