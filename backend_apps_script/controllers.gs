@@ -108,7 +108,7 @@ function getFinancialKPIs() {
 function getLogs(entityId) {
   const allLogs = getRecords('Logs');
   return allLogs
-    .filter(log => log.EntityId === entityId)
+    .filter(log => !entityId || log.EntityId === entityId)
     .sort((a, b) => new Date(b.Timestamp) - new Date(a.Timestamp));
 }
 
