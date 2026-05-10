@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/services';
-import { Lead, Log, AdminRequest } from '../types';
+import { Lead, Log, AdminRequest, User } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { 
   ArrowLeft, Phone, Mail, MessageSquare, Calendar, 
-  DollarSign, FileText, User, Send, CheckCircle, Clock,
+  DollarSign, FileText, User as UserIcon, Send, CheckCircle, Clock,
   ExternalLink, ShieldAlert
 } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
@@ -252,13 +252,13 @@ export const LeadDetail: React.FC = () => {
                 <div>
                   <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">Assigned Setter</p>
                   <div className="flex items-center gap-2 text-sm text-[#161616]/70 font-semibold uppercase tracking-tight">
-                    <User className="w-3.5 h-3.5 text-[#161616]/20" /> {getUsername(lead.setterId || lead.ownerRepId)}
+                    <UserIcon className="w-3.5 h-3.5 text-[#161616]/20" /> {getUsername(lead.setterId || lead.ownerRepId)}
                   </div>
                 </div>
                 <div>
                   <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">Assigned Closer</p>
                   <div className="flex items-center gap-2 text-sm text-[#161616]/70 font-semibold uppercase tracking-tight">
-                    <User className="w-3.5 h-3.5 text-[#161616]/20" /> {lead.closerId ? getUsername(lead.closerId) : 'Not Assigned'}
+                    <UserIcon className="w-3.5 h-3.5 text-[#161616]/20" /> {lead.closerId ? getUsername(lead.closerId) : 'Not Assigned'}
                   </div>
                 </div>
               </div>
