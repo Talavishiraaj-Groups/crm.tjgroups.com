@@ -40,10 +40,10 @@ export const PaymentsPage: React.FC = () => {
 
   useEffect(() => {
     fetchRequests();
-    api.leads.getAll('SUPER_ADMIN', '').then(setLeads);
-    api.deals.getAll('SUPER_ADMIN', '').then(setDeals);
+    api.leads.getAll(role!, user?.id || '').then(setLeads);
+    api.deals.getAll(role!, user?.id || '').then(setDeals);
     api.users.getAll().then(setUsers);
-  }, []);
+  }, [role, user]);
 
   const handleCreateRequest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,12 +92,19 @@ export const PaymentsPage: React.FC = () => {
     }
   };
 
-  const filtered = tab === 'all' ? requests : requests.filter((r) => r.type === tab);
-  const pendingCount = requests.filter((r) => r.status === 'Pending').length;
-  const transitVolume = requests
+  const userRequests = role === 'SUPER_ADMIN' || role === 'ADMIN' 
+    ? requests 
+    : requests.filter(r => {
+        const relatedDeal = deals.find(d => d.id === r.relatedDealId);
+        return r.requestedBy === user?.id || (relatedDeal && (relatedDeal.ownerRepId === user?.id || relatedDeal.closerId === user?.id));
+      });
+
+  const filtered = tab === 'all' ? userRequests : userRequests.filter((r) => r.type === tab);
+  const pendingCount = userRequests.filter((r) => r.status === 'Pending').length;
+  const transitVolume = userRequests
     .filter(r => r.type === 'payment' && r.status === 'Pending')
     .length * 1500;
-  const approvedDocs = requests.filter(r => r.type === 'paperwork' && r.status === 'Approved').length;
+  const approvedDocs = userRequests.filter(r => r.type === 'paperwork' && r.status === 'Approved').length;
 
   return (
     <div className="flex flex-col gap-6 relative">
