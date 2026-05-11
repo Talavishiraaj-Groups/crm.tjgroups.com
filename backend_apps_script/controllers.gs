@@ -112,6 +112,24 @@ function getLogs(entityId) {
     .sort((a, b) => new Date(b.Timestamp) - new Date(a.Timestamp));
 }
 
+function deleteRecord(sheetName, id) {
+  const sheet = getSheetByName(sheetName);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idIndex = headers.indexOf('ID');
+  
+  if (idIndex === -1) throw new Error(`ID column not found in ${sheetName}`);
+  
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idIndex]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      return { status: 'deleted', id: id };
+    }
+  }
+  
+  throw new Error(`Record with ID ${id} not found in ${sheetName}`);
+}
+
 function generateUUID() {
   return Utilities.getUuid();
 }

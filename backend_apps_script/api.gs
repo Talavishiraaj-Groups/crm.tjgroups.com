@@ -111,6 +111,12 @@ function doPost(e) {
         payload.Timestamp = new Date().toISOString();
         result = createRecord('Logs', payload);
         break;
+      case 'deleteUser':
+        result = deleteRecord('Users', payload.id);
+        break;
+      case 'deleteLead':
+        result = deleteRecord('Leads', payload.id);
+        break;
       default:
         return createErrorResponse('Unknown action: ' + action);
     }
