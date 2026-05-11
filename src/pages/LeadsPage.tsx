@@ -48,10 +48,15 @@ export const LeadsPage: React.FC = () => {
   }, [role, user]);
 
   useEffect(() => {
-    if (user && !formData.ownerRepId) {
-      setFormData(prev => ({ ...prev, ownerRepId: user.id }));
+    if (user && role) {
+      setFormData(prev => ({ 
+        ...prev, 
+        ownerRepId: prev.ownerRepId || user.id,
+        setterId: prev.setterId || user.id,
+        closerId: prev.closerId || (role === 'SALES_REP' ? user.id : '')
+      }));
     }
-  }, [user]);
+  }, [user, role]);
 
   const handleQuickConvert = async () => {
     if (!selectedLeadForConvert || !user || !dealValue) return;
@@ -94,6 +99,8 @@ export const LeadsPage: React.FC = () => {
     try {
       await api.leads.create({
         ...formData,
+        setterId: formData.setterId || user.id,
+        closerId: formData.closerId || (role === 'SALES_REP' ? user.id : ''),
         status: 'New'
       });
       setShowModal(false);

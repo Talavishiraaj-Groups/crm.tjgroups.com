@@ -22,7 +22,7 @@ const navItems = [
   { name: 'Deals', icon: Briefcase, path: '/deals', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
   { name: 'Projects', icon: CheckSquare, path: '/projects', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
   { name: 'Meetings', icon: CalendarDays, path: '/meetings', roles: ['SUPER_ADMIN', 'ADMIN', 'SETTER'] },
-  { name: 'Payments', icon: FileText, path: '/payments', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
+  { name: 'Payments', icon: FileText, path: '/payments', roles: ['SUPER_ADMIN', 'ADMIN'] },
   { name: 'Team', icon: UserCircle, path: '/team', roles: ['SUPER_ADMIN', 'ADMIN'] },
   { name: 'Finance', icon: DollarSign, path: '/finance', roles: ['SUPER_ADMIN'] },
   { name: 'Admin', icon: ShieldCheck, path: '/admin', roles: ['SUPER_ADMIN', 'ADMIN'] },

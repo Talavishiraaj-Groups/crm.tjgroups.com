@@ -328,7 +328,7 @@ export const LeadDetail: React.FC = () => {
                 <div>
                   <label className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest block mb-1.5">Re-assign Setter</label>
                   <select 
-                    value={lead.setterId || ''}
+                    value={lead.setterId || lead.ownerRepId || ''}
                     onChange={async (e) => {
                       await api.leads.update(lead.id, { setterId: e.target.value });
                       fetchData();
