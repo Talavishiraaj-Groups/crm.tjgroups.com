@@ -432,13 +432,17 @@ export const AdminPage: React.FC = () => {
                             {log.userId[0]}
                           </div>
                           <div>
-                            <p className="text-xs font-black text-[#161616] uppercase tracking-tight">@{log.userId}</p>
-                            <p className="text-[9px] font-bold text-[#161616]/30 uppercase">
-                              {(() => {
-                                const user = allUsers.find(u => u.id === log.userId || u.username === log.userId);
-                                return user ? ROLE_LABEL[user.role] : 'Team Member';
-                              })()}
-                            </p>
+                            {(() => {
+                              const foundUser = allUsers.find(u => u.id === log.userId || u.username === log.userId);
+                              return (
+                                <>
+                                  <p className="text-xs font-black text-[#161616] uppercase tracking-tight">@{foundUser ? foundUser.username : log.userId}</p>
+                                  <p className="text-[9px] font-bold text-[#161616]/30 uppercase">
+                                    {foundUser ? ROLE_LABEL[foundUser.role] : 'Team Member'}
+                                  </p>
+                                </>
+                              );
+                            })()}
                           </div>
                         </div>
                         <span className="text-[10px] font-mono text-[#161616]/20">{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>

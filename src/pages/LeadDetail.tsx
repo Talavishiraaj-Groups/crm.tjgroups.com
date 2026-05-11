@@ -328,14 +328,15 @@ export const LeadDetail: React.FC = () => {
                 <div>
                   <label className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest block mb-1.5">Re-assign Setter</label>
                   <select 
-                    value={lead.setterId || lead.ownerRepId}
+                    value={lead.setterId || ''}
                     onChange={async (e) => {
                       await api.leads.update(lead.id, { setterId: e.target.value });
                       fetchData();
                     }}
                     className="w-full bg-[#F9F9F9] border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#161616]/30 transition-all"
                   >
-                    {users.filter(u => u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN').map(u => (
+                    <option value="">No Setter</option>
+                    {users.filter(u => u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN').map(u => (
                       <option key={u.id} value={u.id}>{u.username}</option>
                     ))}
                   </select>
@@ -351,7 +352,7 @@ export const LeadDetail: React.FC = () => {
                     className="w-full bg-[#F9F9F9] border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#161616]/30 transition-all"
                   >
                     <option value="">No Closer Assigned</option>
-                    {users.filter(u => u.role === 'SALES_REP' || u.role === 'ADMIN').map(u => (
+                    {users.filter(u => u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN').map(u => (
                       <option key={u.id} value={u.id}>{u.username}</option>
                     ))}
                   </select>

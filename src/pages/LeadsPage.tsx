@@ -26,7 +26,7 @@ export const LeadsPage: React.FC = () => {
     name: '', email: '', phone: '', linkedin: '', notes: '', 
     ownerRepId: user?.id || '',
     setterId: user?.id || '',
-    closerId: ''
+    closerId: role === 'SALES_REP' ? user?.id || '' : ''
   });
 
   const fetchData = () => {

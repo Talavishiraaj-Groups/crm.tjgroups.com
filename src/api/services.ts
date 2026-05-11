@@ -55,7 +55,13 @@ export const api = {
           createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
         })) as Lead[];
         
-        if (role === 'SALES_REP') leads = leads.filter(l => l.ownerRepId === userId);
+        if (role === 'SALES_REP' || role === 'SETTER') {
+          leads = leads.filter(l => 
+            l.ownerRepId === userId || 
+            l.setterId === userId || 
+            l.closerId === userId
+          );
+        }
         return leads;
       } catch (err) {
         return [];
@@ -101,8 +107,8 @@ export const api = {
       const deal = await api.deals.create({
         leadId: leadId,
         ownerRepId: userId,
-        setterId: lead?.ownerRepId || userId,
-        closerId: userId,
+        setterId: lead?.setterId || lead?.ownerRepId || userId,
+        closerId: lead?.closerId || userId,
         status: 'Open',
         value: value
       });
@@ -137,7 +143,13 @@ export const api = {
           updatedAt: r.UpdatedAt || ''
         })) as Deal[];
         
-        if (role === 'SALES_REP') deals = deals.filter(d => d.ownerRepId === userId);
+        if (role === 'SALES_REP' || role === 'SETTER') {
+          deals = deals.filter(d => 
+            d.ownerRepId === userId || 
+            d.setterId === userId || 
+            d.closerId === userId
+          );
+        }
         return deals;
       } catch (err) {
         return [];
