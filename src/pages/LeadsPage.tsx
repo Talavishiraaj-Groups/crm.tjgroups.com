@@ -647,7 +647,7 @@ export const LeadsPage: React.FC = () => {
               </button>
             </div>
 
-            <div className="overflow-y-auto flex-1 p-7 flex flex-col gap-6">
+            <div className="overflow-y-auto flex-1 p-7 flex flex-col gap-6 min-h-0">
 
               {/* Drop Zone — shown only when no file loaded */}
               {importRows.length === 0 && (
@@ -710,14 +710,14 @@ export const LeadsPage: React.FC = () => {
                   </div>
 
                   {/* Preview table */}
-                  <div className="border border-[#DFDFDF] rounded-[8px] overflow-hidden">
-                    <div className="px-4 py-2.5 bg-[#F9F9F9] border-b border-[#DFDFDF]">
+                  <div className="border border-[#DFDFDF] rounded-[8px] overflow-hidden flex flex-col max-h-[220px]">
+                    <div className="px-4 py-2.5 bg-[#F9F9F9] border-b border-[#DFDFDF] shrink-0">
                       <p className="text-[9px] font-black text-[#161616]/30 uppercase tracking-widest">Preview — first 5 rows</p>
                     </div>
-                    <div className="overflow-x-auto">
+                    <div className="overflow-auto flex-1">
                       <table className="w-full text-[11px] border-collapse">
                         <thead>
-                          <tr className="border-b border-[#DFDFDF]">
+                          <tr className="border-b border-[#DFDFDF] sticky top-0 bg-[#F9F9F9]">
                             {['Name', 'Email', 'Phone', 'LinkedIn', 'Notes'].map(h => (
                               <th key={h} className="text-left px-4 py-2 text-[9px] font-black text-[#161616]/30 uppercase tracking-widest">{h}</th>
                             ))}
