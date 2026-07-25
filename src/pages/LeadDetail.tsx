@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { 
   ArrowLeft, Phone, Mail, MessageSquare, Calendar, 
   DollarSign, FileText, User as UserIcon, Send, CheckCircle, Clock,
-  ExternalLink, ShieldAlert
+  ExternalLink, ShieldAlert, Trash2
 } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
@@ -144,6 +144,18 @@ export const LeadDetail: React.FC = () => {
     }
   };
 
+  const handleDeleteLead = async () => {
+    if (!lead) return;
+    if (!window.confirm(`Are you sure you want to delete lead "${lead.name}" permanently?`)) return;
+    try {
+      await api.leads.delete(lead.id);
+      navigate('/leads');
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete lead.");
+    }
+  };
+
   if (isLoading) return (
     <div className="flex flex-col items-center justify-center py-20 gap-4">
       <div className="w-8 h-8 border-2 border-[#161616] border-t-transparent rounded-full animate-spin"></div>
@@ -201,6 +213,14 @@ export const LeadDetail: React.FC = () => {
                 {isConverting ? '...' : 'CONVERT'}
               </button>
             </div>
+          )}
+          {(role === 'SUPER_ADMIN' || role === 'ADMIN') && (
+            <button 
+              onClick={handleDeleteLead}
+              className="flex items-center gap-2 border border-red-200 text-red-500 hover:text-red-700 bg-red-50 px-4 py-2 rounded-[6px] text-xs font-bold hover:bg-red-100 transition-all cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> DELETE LEAD
+            </button>
           )}
         </div>
       </div>

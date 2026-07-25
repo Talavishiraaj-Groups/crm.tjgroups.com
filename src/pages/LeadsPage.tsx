@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/services';
 import { Lead, User } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Search, Upload, X, AlertCircle, CheckCircle2, User as UserIcon, Calendar, ChevronRight, DollarSign, FileText, Bell } from 'lucide-react';
+import { Plus, Search, Upload, X, AlertCircle, CheckCircle2, User as UserIcon, Calendar, ChevronRight, DollarSign, FileText, Bell, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { STATUS_BADGE } from '../utils/badges';
 
@@ -145,6 +145,17 @@ export const LeadsPage: React.FC = () => {
 
   const getUsername = (id: string) => users.find(u => u.id === id)?.username || `User ${id}`;
   const statuses = ['All', 'New', 'Contacted', 'Qualified', 'Converted', 'Closed'];
+
+  const handleDeleteLead = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete lead "${name}" permanently?`)) return;
+    try {
+      await api.leads.delete(id);
+      setLeads(prev => prev.filter(l => l.id !== id));
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete lead.");
+    }
+  };
 
   const filtered = leads
     .filter((l) => {
@@ -492,6 +503,15 @@ export const LeadsPage: React.FC = () => {
                             >
                               <FileText className="w-3.5 h-3.5" />
                             </button>
+                            {isManagement && (
+                              <button 
+                                onClick={() => handleDeleteLead(lead.id, lead.name)}
+                                title="Delete Lead"
+                                className="p-1.5 border border-red-100 rounded-[4px] hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>

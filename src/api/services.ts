@@ -128,6 +128,9 @@ export const api = {
       if (payload.nextFollowUp !== undefined) sheetPayload.NextFollowUp = payload.nextFollowUp;
       await fetchAPI('updateLead', 'POST', sheetPayload);
     },
+    delete: async (id: string): Promise<void> => {
+      await fetchAPI('deleteLead', 'POST', { id });
+    },
     convertToDeal: async (leadId: string, userId: string, value: number): Promise<Deal> => {
       const lead = await api.leads.getById(leadId);
       const deal = await api.deals.create({
