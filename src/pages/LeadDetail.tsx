@@ -227,7 +227,14 @@ export const LeadDetail: React.FC = () => {
               <div className="group cursor-pointer">
                 <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-1">Phone Number</p>
                 <div className="flex items-center gap-2 text-sm text-[#161616]/70 font-medium group-hover:text-[#161616] transition-all">
-                  <Phone className="w-3.5 h-3.5" /> {lead.phone}
+                  <Phone className="w-3.5 h-3.5" /> 
+                  {lead.phone === '#ERROR!' ? (
+                    <span className="text-red-500 font-bold text-xs bg-red-50 px-2 py-0.5 rounded border border-red-100 flex items-center gap-1">
+                      #ERROR! (Prepend single quote ' to number in sheet)
+                    </span>
+                  ) : (
+                    lead.phone
+                  )}
                 </div>
               </div>
               {lead.linkedin && (
@@ -336,7 +343,7 @@ export const LeadDetail: React.FC = () => {
                     className="w-full bg-[#F9F9F9] border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#161616]/30 transition-all"
                   >
                     <option value="">No Setter</option>
-                    {users.filter(u => u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN').map(u => (
+                    {users.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN')).map(u => (
                       <option key={u.id} value={u.id}>{u.username}</option>
                     ))}
                   </select>
@@ -352,7 +359,7 @@ export const LeadDetail: React.FC = () => {
                     className="w-full bg-[#F9F9F9] border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#161616]/30 transition-all"
                   >
                     <option value="">No Closer Assigned</option>
-                    {users.filter(u => u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN').map(u => (
+                    {users.filter(u => u.status === 'Active' && (u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN')).map(u => (
                       <option key={u.id} value={u.id}>{u.username}</option>
                     ))}
                   </select>
@@ -379,7 +386,7 @@ export const LeadDetail: React.FC = () => {
                       <div className="flex justify-between items-baseline mb-2">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-black text-[#161616] uppercase tracking-wider">{item.action}</span>
-                          <span className="text-[10px] font-bold text-[#161616]/20 uppercase">by {item.userId === user?.id ? 'You' : item.userId}</span>
+                          <span className="text-[10px] font-bold text-[#161616]/40 uppercase">by {item.userId === user?.id ? 'You' : getUsername(item.userId)}</span>
                         </div>
                         <span className="text-[10px] font-mono text-[#161616]/30">{new Date(item.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
                       </div>

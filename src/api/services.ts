@@ -5,6 +5,28 @@ import {
 
 const API_URL = import.meta.env.VITE_API_URL;
 
+function sanitizePayload(obj: any): any {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === 'string') {
+    // If it starts with + or = and does not already start with ', prepend '
+    if ((obj.startsWith('+') || obj.startsWith('=')) && !obj.startsWith("'")) {
+      return `'${obj}`;
+    }
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(sanitizePayload);
+  }
+  if (typeof obj === 'object') {
+    const res: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      res[key] = sanitizePayload(value);
+    }
+    return res;
+  }
+  return obj;
+}
+
 async function fetchAPI(action: string, method: 'GET' | 'POST' = 'GET', payload?: any, params: Record<string, string> = {}) {
   if (!API_URL) throw new Error('VITE_API_URL is missing in .env');
   
@@ -12,10 +34,11 @@ async function fetchAPI(action: string, method: 'GET' | 'POST' = 'GET', payload?
   url.searchParams.set('action', action);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   try {
+    const sanitizedPayload = method === 'POST' ? sanitizePayload(payload) : payload;
     const fetchOptions: RequestInit = method === 'POST' ? {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, payload })
+      body: JSON.stringify({ action, payload: sanitizedPayload })
     } : { method: 'GET' };
 
     const res = await fetch(method === 'GET' ? url.toString() : API_URL, fetchOptions);
@@ -52,7 +75,8 @@ export const api = {
           linkedin: r.Linkedin || '',
           setterId: r.SetterId || '', closerId: r.CloserId || '',
           status: r.Status || 'New', ownerRepId: r.OwnerRepId || '', notes: r.Notes || '',
-          createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || ''
+          createdAt: r.CreatedAt || '', updatedAt: r.UpdatedAt || '',
+          nextFollowUp: r.NextFollowUp || ''
         })) as Lead[];
         
         if (role === 'SALES_REP' || role === 'SETTER') {
@@ -75,7 +99,8 @@ export const api = {
         linkedin: data.Linkedin || '',
         setterId: data.SetterId || '', closerId: data.CloserId || '',
         status: data.Status || 'New', ownerRepId: data.OwnerRepId || '', notes: data.Notes || '',
-        createdAt: data.CreatedAt || '', updatedAt: data.UpdatedAt || ''
+        createdAt: data.CreatedAt || '', updatedAt: data.UpdatedAt || '',
+        nextFollowUp: data.NextFollowUp || ''
       } as Lead;
     },
     create: async (payload: Partial<Lead>): Promise<Lead> => {
@@ -100,6 +125,7 @@ export const api = {
       if (payload.linkedin !== undefined) sheetPayload.Linkedin = payload.linkedin;
       if (payload.setterId !== undefined) sheetPayload.SetterId = payload.setterId;
       if (payload.closerId !== undefined) sheetPayload.CloserId = payload.closerId;
+      if (payload.nextFollowUp !== undefined) sheetPayload.NextFollowUp = payload.nextFollowUp;
       await fetchAPI('updateLead', 'POST', sheetPayload);
     },
     convertToDeal: async (leadId: string, userId: string, value: number): Promise<Deal> => {

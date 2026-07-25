@@ -13,6 +13,7 @@ import { FinancePage } from './pages/FinancePage';
 import { AdminPage } from './pages/AdminPage';
 import { GuidePage } from './pages/GuidePage';
 import { MeetingsPage } from './pages/MeetingsPage';
+import { DailyLogsPage } from './pages/DailyLogsPage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode; roles?: string[] }> = ({ children, roles }) => {
   const { user, isLoading, role } = useAuth();
@@ -53,6 +54,7 @@ function AppRoutes() {
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="payments" element={<PaymentsPage />} />
           <Route path="meetings" element={<MeetingsPage />} />
+          <Route path="daily-logs" element={<DailyLogsPage />} />
           <Route path="guide" element={<GuidePage />} />
 
           {/* Admin + Super Admin */}

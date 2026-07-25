@@ -7,10 +7,11 @@ import {
   UserPlus, Search, MoreVertical, CheckCircle, XCircle, X, 
   LayoutGrid, Users as UsersIcon, Briefcase, ShieldAlert, 
   Trash2, Bell, ExternalLink, FileText, DollarSign, Clock,
-  ClipboardCheck, MessageSquare, History
+  ClipboardCheck, MessageSquare, History, ShieldOff
 } from 'lucide-react';
 import { ROLE_BADGE, ROLE_LABEL, AVAIL_DOT } from '../utils/badges';
 import { Log } from '../types';
+import { DailyLogsTab } from '../components/DailyLogsTab';
 
 export const AdminPage: React.FC = () => {
   const { role: currentUserRole, user } = useAuth();
@@ -57,12 +58,15 @@ export const AdminPage: React.FC = () => {
       api.logs.getByEntity('GLOBAL').then(logsData => {
         setLogs(logsData);
         const today = new Date().toDateString();
-        const loggedToday = logsData.some(l => 
-          l.userId === (currentUserRole === 'SUPER_ADMIN' ? 'super_admin' : 'team_lead') && 
-          l.action === 'DAILY_LOG' && 
-          new Date(l.timestamp).toDateString() === today
-        );
-        setHasLoggedToday(loggedToday);
+        // Use the actual logged-in user's id — not hardcoded role strings
+        if (user) {
+          const loggedToday = logsData.some(l =>
+            (l.userId === user.id || l.userId === user.username) &&
+            l.action === 'DAILY_LOG' &&
+            new Date(l.timestamp).toDateString() === today
+          );
+          setHasLoggedToday(loggedToday);
+        }
       });
       
       setIsLoading(false);
@@ -130,31 +134,41 @@ export const AdminPage: React.FC = () => {
     }
   };
 
-  const toggleStatus = async (user: User) => {
-    if (currentUserRole === 'ADMIN' && user.role === 'SUPER_ADMIN') return;
+  const toggleStatus = async (targetUser: User) => {
+    if (currentUserRole === 'ADMIN' && targetUser.role === 'SUPER_ADMIN') return;
+    const newStatus = targetUser.status === 'Active' ? 'Inactive' : 'Active';
+    // Optimistic update
+    setAllUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, status: newStatus } : u));
     try {
-      const newStatus = user.status === 'Active' ? 'Inactive' : 'Active';
-      await api.users.update(user.id, { status: newStatus });
-      fetchData();
+      await api.users.update(targetUser.id, { status: newStatus });
     } catch (err) {
       console.error(err);
+      // Revert on failure
+      setAllUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, status: targetUser.status } : u));
     }
   };
 
-  const handleDeleteUser = async (userId: string) => {
-    const user = allUsers.find(u => u.id === userId);
-    if (!user) return;
-    if (user.role === 'SUPER_ADMIN') {
-      alert("Security Error: Super Admin accounts cannot be deleted.");
+  const handleRevokeAccess = async (targetUser: User) => {
+    if (targetUser.role === 'SUPER_ADMIN') {
+      alert('Security Error: Super Admin access cannot be revoked.');
       return;
     }
-    if (!window.confirm(`REVOKE ACCESS: Are you sure you want to permanently delete user ${user.username}?`)) return;
+    const isActive = targetUser.status === 'Active';
+    const action = isActive ? 'REVOKE' : 'RESTORE';
+    const msg = isActive
+      ? `Revoke access for ${targetUser.username}? They will be blocked from logging in. Data is preserved.`
+      : `Restore access for ${targetUser.username}? They will be able to log in again.`;
+    if (!window.confirm(msg)) return;
+    const newStatus = isActive ? 'Inactive' : 'Active';
+    // Optimistic update
+    setAllUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, status: newStatus } : u));
     try {
-      await api.users.delete(userId);
-      fetchData();
+      await api.users.update(targetUser.id, { status: newStatus });
     } catch (err) {
       console.error(err);
-      alert("Failed to revoke access.");
+      // Revert on failure
+      setAllUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, status: targetUser.status } : u));
+      alert(`Failed to ${action.toLowerCase()} access.`);
     }
   };
 
@@ -282,18 +296,44 @@ export const AdminPage: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-1.5">
-                        <div className={`w-2 h-2 rounded-full ${u.status === 'Active' ? 'bg-[#161616]' : 'bg-[#DFDFDF]'}`}></div>
-                        <span className="text-sm text-[#161616]/60">{u.status}</span>
-                      </div>
+                      {u.status === 'Active' ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-50 border border-green-200 text-[10px] font-black text-green-700 uppercase tracking-wider">
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                          Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-[10px] font-black text-red-600 uppercase tracking-wider">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                          Revoked
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5 text-right">
                       <div className="flex items-center gap-2 justify-end">
-                        <button onClick={() => toggleStatus(u)} className="text-[10px] font-bold text-[#161616]/50 border border-[#DFDFDF] px-2 py-1 rounded-[4px] hover:text-[#161616] transition-all">
-                          {u.status === 'Active' ? 'DEACTIVATE' : 'ACTIVATE'}
+                        {u.role !== 'SUPER_ADMIN' ? (
+                          u.status === 'Active' ? (
+                            <button
+                              onClick={() => handleRevokeAccess(u)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[5px] text-[10px] font-black uppercase tracking-wider bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 hover:border-red-400 transition-all"
+                            >
+                              <ShieldOff className="w-3.5 h-3.5" />
+                              Revoke Access
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleRevokeAccess(u)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[5px] text-[10px] font-black uppercase tracking-wider bg-green-50 border border-green-200 text-green-700 hover:bg-green-100 hover:border-green-400 transition-all"
+                            >
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              Restore Access
+                            </button>
+                          )
+                        ) : (
+                          <span className="text-[9px] font-black text-[#161616]/20 uppercase tracking-widest italic px-3 py-1.5">Protected</span>
+                        )}
+                        <button onClick={() => setEditingUser(u)} className="p-1 hover:bg-[#F9F9F9] rounded-[4px]">
+                          <MoreVertical className="w-4 h-4 text-[#161616]/20" />
                         </button>
-                        <button onClick={() => handleDeleteUser(u.id)} className="p-1.5 text-red-500/40 hover:text-red-500 hover:bg-red-50 rounded-[4px] transition-all"><Trash2 className="w-4 h-4" /></button>
-                        <button onClick={() => setEditingUser(u)} className="p-1 hover:bg-[#F9F9F9] rounded-[4px]"><MoreVertical className="w-4 h-4 text-[#161616]/20" /></button>
                       </div>
                     </td>
                   </tr>
@@ -358,107 +398,36 @@ export const AdminPage: React.FC = () => {
           </table>
         </div>
       ) : tab === 'summaries' ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="md:col-span-1 space-y-6">
-            <div className="bg-[#161616] rounded-[6px] p-6 text-white shadow-xl">
-              <h3 className="text-[10px] font-black text-white/30 uppercase tracking-[0.2em] mb-4">My Daily Contribution</h3>
-              {!hasLoggedToday ? (
-                <div className="space-y-4">
-                  <textarea 
-                    placeholder="Briefly state your key achievements today..."
-                    className="w-full bg-white/5 border border-white/10 rounded-[4px] p-3 text-sm font-medium focus:outline-none focus:border-white/20 transition-all resize-none text-white h-32"
-                    value={dailyNote}
-                    onChange={(e) => setDailyNote(e.target.value)}
-                  />
-                  <button 
-                    onClick={async () => {
-                      if (!dailyNote.trim() || !user) return;
-                      setIsLoggingDaily(true);
-                      try {
-                        await api.logs.create({
-                          entityId: 'USER_' + user.id,
-                          entityType: 'User',
-                          action: 'DAILY_LOG',
-                          userId: user.id,
-                          details: `DAILY SUMMARY: ${dailyNote}`
-                        });
-                        setDailyNote('');
-                        setHasLoggedToday(true);
-                        fetchData();
-                      } catch (err) {
-                        alert('Failed to submit summary.');
-                      } finally {
-                        setIsLoggingDaily(false);
-                      }
-                    }}
-                    disabled={isLoggingDaily || !dailyNote.trim()}
-                    className="w-full bg-white text-[#161616] py-3 rounded-[4px] text-xs font-black uppercase tracking-widest hover:bg-[#F9F9F9] transition-all disabled:opacity-50"
-                  >
-                    {isLoggingDaily ? 'SUBMITTING...' : 'LOG DAILY SUMMARY'}
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center py-6 text-center">
-                  <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center text-green-500 mb-4">
-                    <CheckCircle className="w-6 h-6" />
-                  </div>
-                  <p className="text-sm font-bold text-white uppercase tracking-widest mb-1">Success</p>
-                  <p className="text-[10px] text-white/40 font-medium tracking-tight">Your administrative daily summary is logged.</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="md:col-span-2 space-y-6">
-            <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden">
-              <div className="px-5 py-4 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9]">
-                <h3 className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest flex items-center gap-2"><History className="w-3.5 h-3.5" /> Team-wide Daily Summaries</h3>
-                <span className="text-[9px] font-bold text-[#161616]/20 uppercase">Today: {new Date().toLocaleDateString()}</span>
-              </div>
-              <div className="p-0 max-h-[600px] overflow-y-auto">
-                {(() => {
-                  const today = new Date().toDateString();
-                  const dailyLogs = logs.filter(l => l.action === 'DAILY_LOG' && new Date(l.timestamp).toDateString() === today);
-                  
-                  if (dailyLogs.length === 0) {
-                    return <div className="px-10 py-20 text-center text-[#161616]/30 italic text-sm">No summaries submitted today yet.</div>;
-                  }
-
-                  return dailyLogs.map(log => (
-                    <div key={log.id} className="p-5 border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-all">
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex items-center gap-3">
-                          <div className="w-7 h-7 rounded-full bg-[#161616] text-white flex items-center justify-center text-[10px] font-black uppercase">
-                            {log.userId[0]}
-                          </div>
-                          <div>
-                            {(() => {
-                              const foundUser = allUsers.find(u => u.id === log.userId || u.username === log.userId);
-                              return (
-                                <>
-                                  <p className="text-xs font-black text-[#161616] uppercase tracking-tight">@{foundUser ? foundUser.username : log.userId}</p>
-                                  <p className="text-[9px] font-bold text-[#161616]/30 uppercase">
-                                    {foundUser ? ROLE_LABEL[foundUser.role] : 'Team Member'}
-                                  </p>
-                                </>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                        <span className="text-[10px] font-mono text-[#161616]/20">{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      </div>
-                      <div className="pl-10">
-                        <div className="bg-white border border-[#DFDFDF] rounded-[4px] p-4">
-                          <p className="text-sm text-[#161616]/70 leading-relaxed font-medium">{log.details.replace('DAILY SUMMARY: ', '')}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ));
-                })()}
-              </div>
-            </div>
-          </div>
-        </div>
+        <DailyLogsTab
+          logs={logs}
+          allUsers={allUsers}
+          currentUser={user}
+          currentUserRole={currentUserRole}
+          hasLoggedToday={hasLoggedToday}
+          dailyNote={dailyNote}
+          setDailyNote={setDailyNote}
+          isLoggingDaily={isLoggingDaily}
+          onSubmitLog={async () => {
+            if (!dailyNote.trim() || !user) return;
+            setIsLoggingDaily(true);
+            try {
+              await api.logs.create({
+                entityId: 'USER_' + user.id,
+                entityType: 'User',
+                action: 'DAILY_LOG',
+                userId: user.id,
+                details: `DAILY SUMMARY: ${dailyNote.trim()}`
+              });
+              setDailyNote('');
+              setHasLoggedToday(true);
+              fetchData();
+            } catch {
+              alert('Failed to submit daily log. Please try again.');
+            } finally {
+              setIsLoggingDaily(false);
+            }
+          }}
+        />
       ) : (
         <div className="flex flex-col gap-6">
           <div className="bg-white border border-[#DFDFDF] rounded-[6px] overflow-hidden">
@@ -488,7 +457,7 @@ export const AdminPage: React.FC = () => {
                           }}
                           className="text-xs bg-transparent border-0 font-semibold focus:ring-0 cursor-pointer"
                         >
-                          {allUsers.filter(u => u.role === 'SETTER' || u.role === 'SALES_REP').map(u => (
+                          {allUsers.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP')).map(u => (
                             <option key={u.id} value={u.id}>{u.username}</option>
                           ))}
                         </select>
@@ -503,7 +472,7 @@ export const AdminPage: React.FC = () => {
                           className="text-xs bg-transparent border-0 font-semibold focus:ring-0 cursor-pointer"
                         >
                           <option value="">No Closer Assigned</option>
-                          {allUsers.filter(u => u.role === 'SALES_REP').map(u => (
+                          {allUsers.filter(u => u.status === 'Active' && u.role === 'SALES_REP').map(u => (
                             <option key={u.id} value={u.id}>{u.username}</option>
                           ))}
                         </select>

@@ -63,10 +63,14 @@ export const TeamPage: React.FC = () => {
     }
   };
 
-  const filtered = users.filter((u) => u.username.toLowerCase().includes(search.toLowerCase()));
-  const available = users.filter((u) => u.availability === 'Available').length;
-  const busy = users.filter((u) => u.availability === 'Busy').length;
-  const offline = users.filter((u) => u.availability === 'Offline').length;
+  // Only show ACTIVE users in the team grid
+  const activeUsers = users.filter((u) => u.status === 'Active');
+  const revokedUsers = users.filter((u) => u.status !== 'Active');
+
+  const filtered = activeUsers.filter((u) => u.username.toLowerCase().includes(search.toLowerCase()));
+  const available = activeUsers.filter((u) => u.availability === 'Available').length;
+  const busy = activeUsers.filter((u) => u.availability === 'Busy').length;
+  const offline = activeUsers.filter((u) => u.availability === 'Offline').length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -77,17 +81,17 @@ export const TeamPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-[#161616]"></div>
+            <div className="w-2.5 h-2.5 rounded-full bg-green-500"></div>
             <span className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest">Available</span>
           </div>
           <div className="text-2xl font-bold text-[#161616] tabular-nums">{available}</div>
         </div>
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-[#161616]/40"></div>
+            <div className="w-2.5 h-2.5 rounded-full bg-yellow-400"></div>
             <span className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest">Busy</span>
           </div>
           <div className="text-2xl font-bold text-[#161616] tabular-nums">{busy}</div>
@@ -98,6 +102,13 @@ export const TeamPage: React.FC = () => {
             <span className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest">Offline</span>
           </div>
           <div className="text-2xl font-bold text-[#161616]/30 tabular-nums">{offline}</div>
+        </div>
+        <div className="bg-red-50 border border-red-200 rounded-[6px] p-5">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-red-500"></div>
+            <span className="text-[10px] font-bold text-red-500/70 uppercase tracking-widest">Revoked</span>
+          </div>
+          <div className="text-2xl font-bold text-red-500 tabular-nums">{revokedUsers.length}</div>
         </div>
       </div>
 

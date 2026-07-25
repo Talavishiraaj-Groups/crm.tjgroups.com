@@ -33,6 +33,7 @@ export interface Lead {
   ownerRepId: string;
   createdAt: string;
   updatedAt: string;
+  nextFollowUp?: string;
 }
 
 export type DealStatus = 'Open' | 'Won' | 'Lost';

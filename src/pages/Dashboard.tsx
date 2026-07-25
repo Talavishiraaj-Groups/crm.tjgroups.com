@@ -8,7 +8,7 @@ import {
 import { api } from '../api/services';
 import { useNavigate } from 'react-router-dom';
 import { STATUS_BADGE } from '../utils/badges';
-import { Lead, Deal, Project, AdminRequest, Log } from '../types';
+import { Lead, Deal, Project, AdminRequest, Log, User } from '../types';
 
 const LOG_ICON: Record<string, any> = {
   CALL: Phone,
@@ -30,6 +30,7 @@ export const Dashboard: React.FC = () => {
   const [myProjects, setMyProjects] = useState<Project[]>([]);
   const [recentLogs, setRecentLogs] = useState<Log[]>([]);
   const [pendingRequests, setPendingRequests] = useState<AdminRequest[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
   // Daily Log State
@@ -56,9 +57,13 @@ export const Dashboard: React.FC = () => {
 
       try {
         // Fetch all logs to check for daily summary
-        const logs = await api.logs.getByEntity('GLOBAL');
+        const [logs, usersData] = await Promise.all([
+          api.logs.getByEntity('GLOBAL'),
+          api.users.getAll().catch(() => [] as User[])
+        ]);
         const sortedLogs = (logs || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         setRecentLogs(sortedLogs);
+        setAllUsers(usersData);
         
         // Check if user has logged today (DAILY_LOG)
         const today = new Date().toDateString();
@@ -225,9 +230,11 @@ export const Dashboard: React.FC = () => {
                         <div className="flex justify-between items-center mb-1">
                           <div className="flex items-center gap-2">
                             <span className="text-[10px] font-black text-[#161616] uppercase tracking-tighter">{log.action}</span>
-                            <span className="text-[9px] font-bold text-[#161616]/20 uppercase">@{log.userId}</span>
+                            <span className="text-[9px] font-bold text-[#161616]/40 uppercase">@{allUsers.find(u => u.id === log.userId)?.username || log.userId.slice(0, 8)}</span>
                           </div>
-                          <span className="text-[10px] font-mono text-[#161616]/30">{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span className="text-[10px] font-mono text-[#161616]/30">
+                            {new Date(log.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })} · {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
                         <p className="text-[11px] text-[#161616]/60 font-medium truncate tracking-tight">{log.details}</p>
                       </div>

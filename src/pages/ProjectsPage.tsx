@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
 import { Project, Deal, ProjectStatus, User as UserType } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { LayoutGrid as GridIcon, List as ListIcon, Plus as PlusIcon, Calendar as CalendarIcon, User as UserIcon, MoreVertical, Send, MessageSquare } from 'lucide-react';
+import { LayoutGrid as GridIcon, List as ListIcon, Plus as PlusIcon, Calendar as CalendarIcon, User as UserIcon, MoreVertical, Send, MessageSquare, Search, Filter } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
 const STAGES: { key: ProjectStatus; label: string; pct: number }[] = [
@@ -24,6 +24,12 @@ export const ProjectsPage: React.FC = () => {
   const [usersList, setUsers] = useState<UserType[]>([]);
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
   const [isLoading, setIsLoading] = useState(true);
+
+  // Filter States
+  const [search, setSearch] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'All' | ProjectStatus>('All');
+  const [selectedAM, setSelectedAM] = useState('all');
+  const [selectedLiaison, setSelectedLiaison] = useState('all');
 
   // Modals
   const [showModal, setShowModal] = useState(false);
@@ -146,6 +152,24 @@ export const ProjectsPage: React.FC = () => {
 
   const isManagement = role === 'SUPER_ADMIN' || role === 'ADMIN';
 
+  const filteredProjects = projects.filter(project => {
+    const clientName = project.clientName.toLowerCase();
+    
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      if (!clientName.includes(q)) return false;
+    }
+
+    if (activeFilter !== 'All') {
+      if (project.status !== activeFilter) return false;
+    }
+
+    if (selectedAM !== 'all' && project.accountManagerId !== selectedAM) return false;
+    if (selectedLiaison !== 'all' && project.liaisonId !== selectedLiaison) return false;
+
+    return true;
+  });
+
   return (
     <div className="flex flex-col gap-6 relative">
       <div className="flex justify-between items-center">
@@ -208,7 +232,7 @@ export const ProjectsPage: React.FC = () => {
                     className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white disabled:bg-[#F9F9F9] disabled:cursor-not-allowed"
                   >
                     <option value="">— Unassigned —</option>
-                    {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                    {usersList.filter(u => u.status === 'Active').map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
                   </select>
                 </div>
                 <div>
@@ -219,7 +243,7 @@ export const ProjectsPage: React.FC = () => {
                     className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white disabled:bg-[#F9F9F9] disabled:cursor-not-allowed"
                   >
                     <option value="">— Unassigned —</option>
-                    {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                    {usersList.filter(u => u.status === 'Active').map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
                   </select>
                 </div>
               </div>
@@ -277,7 +301,7 @@ export const ProjectsPage: React.FC = () => {
                       className="w-full px-4 py-2.5 border border-[#DFDFDF] rounded-[6px] text-sm focus:outline-none focus:border-[#161616] bg-white disabled:bg-[#F9F9F9] font-bold"
                     >
                       <option value="">— Unassigned —</option>
-                      {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                      {usersList.filter(u => u.status === 'Active').map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
                     </select>
                   </div>
                   <div>
@@ -288,7 +312,7 @@ export const ProjectsPage: React.FC = () => {
                       className="w-full px-4 py-2.5 border border-[#DFDFDF] rounded-[6px] text-sm focus:outline-none focus:border-[#161616] bg-white disabled:bg-[#F9F9F9] font-bold"
                     >
                       <option value="">— Unassigned —</option>
-                      {usersList.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                      {usersList.filter(u => u.status === 'Active').map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
                     </select>
                   </div>
                 </div>
@@ -313,7 +337,7 @@ export const ProjectsPage: React.FC = () => {
                     projectLogs.slice().reverse().map(log => (
                       <div key={log.id} className="bg-white border border-[#DFDFDF] rounded-[6px] p-3 shadow-sm">
                         <div className="flex justify-between items-baseline mb-1">
-                          <span className="text-[9px] font-black text-[#161616]/20 uppercase tracking-tighter">@{usersList.find(u => u.id === log.userId)?.username || log.userId}</span>
+                          <span className="text-[9px] font-black text-[#161616]/20 uppercase tracking-tighter">@{usersList.find(u => u.id === log.userId)?.username || log.userId.slice(0, 8)}</span>
                           <span className="text-[8px] font-mono text-[#161616]/20">{new Date(log.timestamp).toLocaleString()}</span>
                         </div>
                         <p className="text-xs text-[#161616]/70 leading-relaxed font-medium">{log.details}</p>
@@ -341,12 +365,78 @@ export const ProjectsPage: React.FC = () => {
         </div>
       )}
 
+      {/* Filters Toolbar */}
+      {!isLoading && (
+        <div className="bg-white border border-[#DFDFDF] rounded-[10px] p-5 shadow-sm space-y-4">
+          <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+            {/* Search */}
+            <div className="relative flex items-center">
+              <Search className="absolute left-2.5 w-3.5 h-3.5 text-[#161616]/30" />
+              <input
+                type="text"
+                placeholder="Search clients..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="pl-8 pr-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 w-[240px]"
+              />
+            </div>
+
+            {/* Status tabs */}
+            <div className="flex bg-[#F9F9F9] border border-[#DFDFDF] p-0.5 rounded-[6px]">
+              {([
+                { key: 'All', label: 'All' },
+                { key: 'Onboarding', label: 'Onboarding' },
+                { key: 'InProgress', label: 'In Progress' },
+                { key: 'Completed', label: 'Completed' }
+              ] as const).map(s => (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() => setActiveFilter(s.key)}
+                  className={`px-3 py-1.5 rounded-[4px] text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${activeFilter === s.key ? 'bg-white shadow-sm text-[#161616]' : 'text-[#161616]/40 hover:text-[#161616]/60'}`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* AM / Liaison dropdown filters */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3 border-t border-[#DFDFDF]">
+            <div className="relative">
+              <select
+                value={selectedAM}
+                onChange={e => setSelectedAM(e.target.value)}
+                className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
+              >
+                <option value="all">Filter by Account Manager: All</option>
+                {usersList.filter(u => u.status === 'Active').map(u => (
+                  <option key={u.id} value={u.id}>@{u.username}</option>
+                ))}
+              </select>
+            </div>
+            <div className="relative">
+              <select
+                value={selectedLiaison}
+                onChange={e => setSelectedLiaison(e.target.value)}
+                className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
+              >
+                <option value="all">Filter by Liaison: All</option>
+                {usersList.filter(u => u.status === 'Active').map(u => (
+                  <option key={u.id} value={u.id}>@{u.username}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-12 text-center text-[#161616]/30 italic text-sm">Loading projects...</div>
       ) : view === 'kanban' ? (
         <div className="flex gap-4 overflow-x-auto pb-4">
           {STAGES.map((stage, stageIdx) => {
-            const stageProjects = projects.filter((p) => p.status === stage.key);
+            const stageProjects = filteredProjects.filter((p) => p.status === stage.key);
             const isLast = stageIdx === STAGES.length - 1;
             return (
               <div key={stage.key} className="flex-1 min-w-[280px] flex flex-col gap-3">
@@ -415,10 +505,10 @@ export const ProjectsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {projects.length === 0 ? (
-                <tr><td colSpan={7} className="px-5 py-16 text-center text-[#161616]/30 italic text-sm">No projects found.</td></tr>
+              {filteredProjects.length === 0 ? (
+                <tr><td colSpan={7} className="px-5 py-16 text-center text-[#161616]/30 italic text-sm">No projects found matching filter criteria.</td></tr>
               ) : (
-                projects.map((project) => {
+                filteredProjects.map((project) => {
                   const stageConfig = STAGES.find((s) => s.key === project.status);
                   return (
                     <tr key={project.id} className="border-b border-[#DFDFDF] last:border-0 hover:bg-[#F9F9F9] transition-colors cursor-pointer" onClick={() => {

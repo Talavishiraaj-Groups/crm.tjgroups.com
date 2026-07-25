@@ -11,7 +11,8 @@ import {
   ShieldCheck,
   LogOut,
   BookOpen,
-  CalendarDays
+  CalendarDays,
+  ClipboardCheck
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import logo from '../../assets/tjgroups-logo-dark.png';
@@ -23,6 +24,7 @@ const navItems = [
   { name: 'Projects', icon: CheckSquare, path: '/projects', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
   { name: 'Meetings', icon: CalendarDays, path: '/meetings', roles: ['SUPER_ADMIN', 'ADMIN', 'SETTER'] },
   { name: 'Payments', icon: FileText, path: '/payments', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP'] },
+  { name: 'Daily Logs', icon: ClipboardCheck, path: '/daily-logs', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
   { name: 'Team', icon: UserCircle, path: '/team', roles: ['SUPER_ADMIN', 'ADMIN'] },
   { name: 'Finance', icon: DollarSign, path: '/finance', roles: ['SUPER_ADMIN'] },
   { name: 'Admin', icon: ShieldCheck, path: '/admin', roles: ['SUPER_ADMIN', 'ADMIN'] },

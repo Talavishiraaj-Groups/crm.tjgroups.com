@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../api/services';
 import { Deal, Lead, User, Commission } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Plus, User as UserIcon, Percent, Edit3, X } from 'lucide-react';
+import { Plus, User as UserIcon, Percent, Edit3, X, Search, Filter } from 'lucide-react';
 import { STATUS_BADGE, ROLE_LABEL } from '../utils/badges';
 
 export const DealsPage: React.FC = () => {
@@ -12,6 +12,12 @@ export const DealsPage: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [commissions, setCommissions] = useState<Commission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Filter States
+  const [search, setSearch] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'All' | 'Open' | 'Won' | 'Lost'>('All');
+  const [selectedSetter, setSelectedSetter] = useState('all');
+  const [selectedCloser, setSelectedCloser] = useState('all');
   
   // New Deal Modal
   const [showModal, setShowModal] = useState(false);
@@ -188,6 +194,34 @@ export const DealsPage: React.FC = () => {
     return STATUS_BADGE[status as keyof typeof STATUS_BADGE] || STATUS_BADGE.Open;
   };
 
+  const filteredDeals = deals.filter(deal => {
+    const leadName = getLeadName(deal.leadId).toLowerCase();
+    const dealIdShort = deal.id.split('-')[0].toLowerCase();
+    
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      if (!leadName.includes(q) && !dealIdShort.includes(q)) return false;
+    }
+
+    if (activeFilter !== 'All') {
+      if (deal.status !== activeFilter) return false;
+    }
+
+    if (selectedSetter !== 'all') {
+      const commission = commissions.find(c => String(c.dealId) === String(deal.id));
+      const dealSetter = deal.setterId || commission?.setterId || '';
+      if (dealSetter !== selectedSetter) return false;
+    }
+
+    if (selectedCloser !== 'all') {
+      const commission = commissions.find(c => String(c.dealId) === String(deal.id));
+      const dealCloser = deal.closerId || commission?.closerId || '';
+      if (dealCloser !== selectedCloser) return false;
+    }
+
+    return true;
+  });
+
   return (
     <div className="flex flex-col gap-6 relative">
       <div className="flex justify-between items-center">
@@ -203,6 +237,67 @@ export const DealsPage: React.FC = () => {
         </button>
       </div>
 
+      {/* Filters Toolbar */}
+      {!isLoading && (
+        <div className="bg-white border border-[#DFDFDF] rounded-[10px] p-5 shadow-sm space-y-4">
+          <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+            {/* Search */}
+            <div className="relative flex items-center">
+              <Search className="absolute left-2.5 w-3.5 h-3.5 text-[#161616]/30" />
+              <input
+                type="text"
+                placeholder="Search clients or deal IDs..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="pl-8 pr-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 w-[240px]"
+              />
+            </div>
+
+            {/* Status tabs */}
+            <div className="flex bg-[#F9F9F9] border border-[#DFDFDF] p-0.5 rounded-[6px]">
+              {(['All', 'Open', 'Won', 'Lost'] as const).map(s => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setActiveFilter(s)}
+                  className={`px-3 py-1.5 rounded-[4px] text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${activeFilter === s ? 'bg-white shadow-sm text-[#161616]' : 'text-[#161616]/40 hover:text-[#161616]/60'}`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* User assignment dropdown filters */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3 border-t border-[#DFDFDF]">
+            <div className="relative">
+              <select
+                value={selectedSetter}
+                onChange={e => setSelectedSetter(e.target.value)}
+                className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
+              >
+                <option value="all">Filter by Setter: All</option>
+                {users.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP')).map(u => (
+                  <option key={u.id} value={u.id}>@{u.username}</option>
+                ))}
+              </select>
+            </div>
+            <div className="relative">
+              <select
+                value={selectedCloser}
+                onChange={e => setSelectedCloser(e.target.value)}
+                className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
+              >
+                <option value="all">Filter by Closer: All</option>
+                {users.filter(u => u.status === 'Active' && u.role === 'SALES_REP').map(u => (
+                  <option key={u.id} value={u.id}>@{u.username}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       {isLoading ? (
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-12 text-center text-[#161616]/30 italic text-sm">Loading deals...</div>
@@ -217,10 +312,10 @@ export const DealsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {deals.length === 0 ? (
-                <tr><td colSpan={7} className="px-5 py-10 text-center text-[#161616]/30 italic text-sm">No deals found in this pipeline.</td></tr>
+              {filteredDeals.length === 0 ? (
+                <tr><td colSpan={7} className="px-5 py-10 text-center text-[#161616]/30 italic text-sm">No deals found matching filter criteria.</td></tr>
               ) : (
-                deals.map((deal) => {
+                filteredDeals.map((deal) => {
                   const active = isDealActive(deal.status);
                   const isWon = deal.status.toUpperCase().includes('WON');
                   const commission = commissions.find(c => String(c.dealId) === String(deal.id));
@@ -310,7 +405,7 @@ export const DealsPage: React.FC = () => {
                     className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
                   >
                     <option value="">Select Setter</option>
-                    {users.map(u => (
+                    {users.filter(u => u.status === 'Active').map(u => (
                       <option key={u.id} value={u.id}>{u.username} ({ROLE_LABEL[u.role]})</option>
                     ))}
                   </select>
@@ -323,7 +418,7 @@ export const DealsPage: React.FC = () => {
                     className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50 bg-white"
                   >
                     <option value="">Select Closer</option>
-                    {users.map(u => (
+                    {users.filter(u => u.status === 'Active').map(u => (
                       <option key={u.id} value={u.id}>{u.username} ({ROLE_LABEL[u.role]})</option>
                     ))}
                   </select>
