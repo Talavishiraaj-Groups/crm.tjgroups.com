@@ -101,18 +101,45 @@ function getZohoEmails(params) {
   });
   var accountId = JSON.parse(accountsRes.getContentText()).data[0].accountId;
   
-  // Search messages matching leadEmail
-  var searchUrl = "https://mail.zoho.in/api/accounts/" + accountId + "/messages?searchKey=sender:" + leadEmail + " OR recipient:" + leadEmail;
-  var searchRes = UrlFetchApp.fetch(searchUrl, {
-    headers: { "Authorization": "Zoho-oauthtoken " + accessToken }
+  // 1. Fetch Sent emails (to the lead)
+  var sentUrl = "https://mail.zoho.in/api/accounts/" + accountId + "/messages/search?searchKey=" + encodeURIComponent("to:" + leadEmail);
+  var sentRes = UrlFetchApp.fetch(sentUrl, {
+    headers: { "Authorization": "Zoho-oauthtoken " + accessToken },
+    muteHttpExceptions: true
   });
-  var messageList = JSON.parse(searchRes.getContentText()).data || [];
+  var sentData = JSON.parse(sentRes.getContentText()).data || [];
+  
+  // 2. Fetch Received emails (from the lead)
+  var inboxUrl = "https://mail.zoho.in/api/accounts/" + accountId + "/messages/search?searchKey=" + encodeURIComponent("sender:" + leadEmail);
+  var inboxRes = UrlFetchApp.fetch(inboxUrl, {
+    headers: { "Authorization": "Zoho-oauthtoken " + accessToken },
+    muteHttpExceptions: true
+  });
+  var inboxData = JSON.parse(inboxRes.getContentText()).data || [];
+  
+  // Merge and deduplicate by messageId
+  var allMessages = sentData.concat(inboxData);
+  var uniqueMessages = [];
+  var seenIds = {};
+  
+  for (var i = 0; i < allMessages.length; i++) {
+    var msg = allMessages[i];
+    if (msg && msg.messageId && !seenIds[msg.messageId]) {
+      seenIds[msg.messageId] = true;
+      uniqueMessages.push(msg);
+    }
+  }
+  
+  // Sort chronologically by receivedTime ascending
+  uniqueMessages.sort(function(a, b) {
+    return Number(a.receivedTime) - Number(b.receivedTime);
+  });
   
   // Map Zoho messages to UI format
-  return messageList.map(function(m) {
+  return uniqueMessages.map(function(m) {
     return {
       id: m.messageId,
-      subject: m.subject,
+      subject: m.subject || "(No Subject)",
       content: m.summary || "No preview summary",
       direction: m.sender.indexOf(leadEmail) !== -1 ? "in" : "out",
       timestamp: new Date(Number(m.receivedTime)).toISOString()
@@ -127,10 +154,13 @@ function sendZohoEmail(payload) {
   var subject = payload.subject;
   var content = payload.content;
   
-  var refreshToken = getUserRefreshToken(userId);
-  if (!refreshToken) throw new Error("User has not linked their Zoho Mail account.");
+  var userObj = getRecordById('Users', userId);
+  if (!userObj || !userObj.ZohoRefreshToken || !userObj.ZohoEmail) {
+    throw new Error("User has not linked their Zoho Mail account or Zoho Email is missing.");
+  }
   
-  var accessToken = getZohoAccessToken(refreshToken);
+  var fromAddress = userObj.ZohoEmail;
+  var accessToken = getZohoAccessToken(userObj.ZohoRefreshToken);
   
   // Get Account ID
   var accountsUrl = "https://mail.zoho.in/api/accounts";
@@ -146,14 +176,23 @@ function sendZohoEmail(payload) {
     contentType: "application/json",
     headers: { "Authorization": "Zoho-oauthtoken " + accessToken },
     payload: JSON.stringify({
+      fromAddress: fromAddress,
       toAddress: to,
       subject: subject,
-      content: content
+      content: content,
+      mailFormat: "html"
     }),
     muteHttpExceptions: true
   };
   var response = UrlFetchApp.fetch(sendUrl, sendOptions);
-  return JSON.parse(response.getContentText());
+  var resJSON = JSON.parse(response.getContentText());
+  
+  // Check if delivery was successful
+  if (resJSON.status && resJSON.status.code !== 200) {
+    throw new Error("Zoho API Error: " + resJSON.status.description);
+  }
+  
+  return resJSON;
 }
 
 function triggerAuth() {

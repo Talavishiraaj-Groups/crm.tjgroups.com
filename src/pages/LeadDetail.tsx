@@ -24,12 +24,15 @@ export const LeadDetail: React.FC = () => {
   const [isConverting, setIsConverting] = useState(false);
   const [dealValue, setDealValue] = useState(0);
 
+  // Tab state
+  const [activeRightTab, setActiveRightTab] = useState<'activity' | 'zoho'>('activity');
+
   // Zoho Mail States
   const [zohoEmails, setZohoEmails] = useState<any[]>([]);
   const [emailSubject, setEmailSubject] = useState('');
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [isZohoLinked, setIsZohoLinked] = useState(false);
-  const [logType, setLogType] = useState<'call' | 'message' | 'email' | 'zoho'>('call');
+  const [logType, setLogType] = useState<'call' | 'message' | 'email'>('call');
 
   const fetchData = async () => {
     if (id) {
@@ -77,11 +80,11 @@ export const LeadDetail: React.FC = () => {
     fetchData();
   }, [id]);
 
-  const handleLogActivity = async () => {
+  const handleLogActivity = async (forceLogType?: 'zoho') => {
     if (!newLog.trim() || !id || !user) return;
     setIsSendingEmail(true);
     try {
-      if (logType === 'zoho') {
+      if (forceLogType === 'zoho') {
         if (!emailSubject.trim()) {
           alert('Please enter an email subject.');
           setIsSendingEmail(false);
@@ -417,121 +420,188 @@ export const LeadDetail: React.FC = () => {
         {/* Right Col */}
         <div className="lg:col-span-2 flex flex-col gap-4">
           {/* Interaction Timeline */}
+          {/* Interaction Timeline */}
           <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-6 shadow-sm min-h-[400px]">
-            <h3 className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest mb-8">Activity Feed</h3>
-            <div className="flex flex-col gap-8 relative ml-2">
-              <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[#DFDFDF]"></div>
-              {(() => {
-                const combinedFeed = [
-                  ...logs.map(l => ({
-                    id: l.id,
-                    action: l.action,
-                    userId: l.userId,
-                    details: l.details,
-                    timestamp: l.timestamp,
-                    isZoho: false
-                  })),
-                  ...zohoEmails.map(e => ({
-                    id: e.id,
-                    action: e.direction === 'in' ? 'EMAIL RECEIVED' : 'EMAIL SENT',
-                    userId: e.direction === 'in' ? 'client' : user?.id || 'me',
-                    details: `Subject: ${e.subject}\n\n${e.content}`,
-                    timestamp: e.timestamp,
-                    isZoho: true
-                  }))
-                ];
+            {/* Tabs Header */}
+            <div className="flex border-b border-[#DFDFDF] mb-6">
+              <button
+                type="button"
+                onClick={() => setActiveRightTab('activity')}
+                className={`px-5 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-all cursor-pointer ${
+                  activeRightTab === 'activity' 
+                    ? 'border-[#161616] text-[#161616]' 
+                    : 'border-transparent text-[#161616]/40 hover:text-[#161616]/80'
+                }`}
+              >
+                Activity Log
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveRightTab('zoho')}
+                className={`px-5 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+                  activeRightTab === 'zoho' 
+                    ? 'border-blue-500 text-blue-600' 
+                    : 'border-transparent text-[#161616]/40 hover:text-[#161616]/80'
+                }`}
+              >
+                <Mail className="w-3.5 h-3.5" /> Zoho Emails
+              </button>
+            </div>
 
-                combinedFeed.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-                if (combinedFeed.length === 0) {
-                  return <div className="text-[11px] text-[#161616]/30 italic ml-6">No interactions recorded for this lead.</div>;
-                }
-
-                return combinedFeed.reverse().map((item) => (
-                  <div key={item.id} className="flex gap-6 relative group">
-                    <div className={`w-3.5 h-3.5 rounded-full shrink-0 mt-1 z-10 border-2 transition-all group-hover:scale-125 ${
-                      item.action.includes('SYSTEM') || item.action.includes('STATUS_CHANGE') 
-                        ? 'border-[#DFDFDF] bg-white' 
-                        : item.isZoho 
-                          ? 'border-blue-500 bg-blue-500 shadow-sm'
+            {activeRightTab === 'activity' ? (
+              <div className="flex flex-col gap-8 relative ml-2">
+                <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[#DFDFDF]"></div>
+                {logs.length === 0 ? (
+                  <div className="text-[11px] text-[#161616]/30 italic ml-6">No operational logs recorded.</div>
+                ) : (
+                  logs.slice().reverse().map((item) => (
+                    <div key={item.id} className="flex gap-6 relative group">
+                      <div className={`w-3.5 h-3.5 rounded-full shrink-0 mt-1 z-10 border-2 transition-all group-hover:scale-125 ${
+                        item.action.includes('SYSTEM') || item.action.includes('STATUS_CHANGE') 
+                          ? 'border-[#DFDFDF] bg-white' 
                           : 'border-[#161616] bg-[#161616]'
-                    }`}></div>
-                    <div className="flex-1">
-                      <div className="flex justify-between items-baseline mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs font-black uppercase tracking-wider ${item.isZoho ? 'text-blue-600' : 'text-[#161616]'}`}>{item.action}</span>
-                          {item.isZoho && <span className="text-[8px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-[3px] uppercase tracking-wider">Zoho Mail</span>}
-                          <span className="text-[10px] font-bold text-[#161616]/40 uppercase">
-                            by {item.userId === 'client' ? 'Client' : item.userId === user?.id ? 'You' : getUsername(item.userId)}
-                          </span>
+                      }`}></div>
+                      <div className="flex-1">
+                        <div className="flex justify-between items-baseline mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black uppercase tracking-wider text-[#161616]">{item.action}</span>
+                            <span className="text-[10px] font-bold text-[#161616]/40 uppercase">
+                              by {item.userId === user?.id ? 'You' : getUsername(item.userId)}
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-mono text-[#161616]/30">{new Date(item.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
                         </div>
-                        <span className="text-[10px] font-mono text-[#161616]/30">{new Date(item.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
-                      </div>
-                      <div className={`bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] p-4 text-sm text-[#161616]/70 leading-relaxed whitespace-pre-wrap ${item.action === 'GUIDANCE' ? 'border-l-4 border-l-[#161616]' : ''} ${item.isZoho ? 'border-l-4 border-l-blue-500 bg-blue-50/10' : ''}`}>
-                        {item.details}
+                        <div className={`bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] p-4 text-sm text-[#161616]/70 leading-relaxed whitespace-pre-wrap ${item.action === 'GUIDANCE' ? 'border-l-4 border-l-[#161616]' : ''}`}>
+                          {item.details}
+                        </div>
                       </div>
                     </div>
+                  ))
+                )}
+              </div>
+            ) : (
+              // Zoho Emails Tab Content
+              <div className="flex flex-col gap-6">
+                {!isZohoLinked ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-center gap-4 bg-[#F9F9F9] border border-dashed border-[#DFDFDF] rounded-[8px] px-6">
+                    <Mail className="w-10 h-10 text-[#161616]/20" />
+                    <div>
+                      <h4 className="text-xs font-bold text-[#161616] uppercase tracking-widest mb-1.5">Zoho Mail Not Linked</h4>
+                      <p className="text-[11px] text-[#161616]/40 max-w-[280px] leading-relaxed mx-auto">Link your Zoho Business Mail account under settings on the Dashboard to sync email conversations.</p>
+                    </div>
                   </div>
-                ));
-              })()}
-            </div>
+                ) : (
+                  <div className="flex flex-col gap-8 relative ml-2">
+                    <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[#DFDFDF]"></div>
+                    {zohoEmails.length === 0 ? (
+                      <div className="text-[11px] text-[#161616]/30 italic ml-6">No emails exchanged with this lead yet. (Synced from Zoho Mail app)</div>
+                    ) : (
+                      zohoEmails.slice().reverse().map((item) => (
+                        <div key={item.id} className="flex gap-6 relative group">
+                          <div className={`w-3.5 h-3.5 rounded-full shrink-0 mt-1 z-10 border-2 border-blue-500 bg-blue-500 shadow-sm transition-all group-hover:scale-125`}></div>
+                          <div className="flex-1">
+                            <div className="flex justify-between items-baseline mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-black uppercase tracking-wider text-blue-600">
+                                  {item.direction === 'in' ? 'EMAIL RECEIVED' : 'EMAIL SENT'}
+                                </span>
+                                <span className="text-[8px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-[3px] uppercase tracking-wider">Zoho Mail</span>
+                                <span className="text-[10px] font-bold text-[#161616]/40 uppercase">
+                                  by {item.direction === 'in' ? 'Client' : 'You'}
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-mono text-[#161616]/30">{new Date(item.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                            </div>
+                            <div className="bg-[#F9F9F9] border border-[#DFDFDF] border-l-4 border-l-blue-500 bg-blue-50/10 rounded-[8px] p-4 text-sm text-[#161616]/70 leading-relaxed whitespace-pre-wrap">
+                              <p className="font-bold text-[#161616] mb-2">{item.subject}</p>
+                              <div className="text-xs text-[#161616]/80">{item.content}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Log Action Box */}
           {lead.status !== 'Converted' && (
-            <div className="bg-[#161616] rounded-[6px] p-6 shadow-xl">
-              <h3 className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-5">Log New Interaction</h3>
-              <div className="flex gap-3 mb-5">
-                {(() => {
-                  const logOptions: { key: 'call' | 'message' | 'email' | 'zoho'; icon: any; label: string }[] = [
-                    { key: 'call', icon: Phone, label: 'Call' }, 
-                    { key: 'message', icon: MessageSquare, label: 'WhatsApp' }, 
-                    { key: 'email', icon: Mail, label: 'Email (Note)' }
-                  ];
-                  if (isZohoLinked) {
-                    logOptions.push({ key: 'zoho', icon: Mail, label: 'Send Zoho Email' });
-                  }
-                  return logOptions.map(({ key, icon: Icon, label }) => (
-                    <button 
-                      key={key} 
-                      type="button"
-                      onClick={() => setLogType(key)} 
-                      className={`flex items-center gap-2 px-4 py-2 rounded-[6px] text-[11px] font-black transition-all uppercase tracking-widest cursor-pointer ${logType === key ? 'bg-white text-[#161616]' : 'border border-white/10 text-white/40 hover:border-white/30 hover:text-white'}`}
-                    >
-                      <Icon className="w-3.5 h-3.5" />{label}
-                    </button>
-                  ));
-                })()}
-              </div>
+            <>
+              {activeRightTab === 'activity' ? (
+                // CRM Logs Composer
+                <div className="bg-[#161616] rounded-[6px] p-6 shadow-xl">
+                  <h3 className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-5">Log New Interaction</h3>
+                  <div className="flex gap-3 mb-5">
+                    {([
+                      { key: 'call', icon: Phone, label: 'Call' }, 
+                      { key: 'message', icon: MessageSquare, label: 'WhatsApp' }, 
+                      { key: 'email', icon: Mail, label: 'Email Note' }
+                    ] as const).map(({ key, icon: Icon, label }) => (
+                      <button 
+                        key={key} 
+                        type="button"
+                        onClick={() => setLogType(key)} 
+                        className={`flex items-center gap-2 px-4 py-2 rounded-[6px] text-[11px] font-black transition-all uppercase tracking-widest cursor-pointer ${logType === key ? 'bg-white text-[#161616]' : 'border border-white/10 text-white/40 hover:border-white/30 hover:text-white'}`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />{label}
+                      </button>
+                    ))}
+                  </div>
 
-              {logType === 'zoho' && (
-                <div className="mb-4">
-                  <input
-                    type="text"
-                    placeholder="Email Subject..."
-                    value={emailSubject}
-                    onChange={e => setEmailSubject(e.target.value)}
-                    className="w-full px-5 py-3 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 text-white placeholder:text-white/20 font-bold"
+                  <textarea 
+                    value={newLog} 
+                    onChange={(e) => setNewLog(e.target.value)} 
+                    placeholder={`Describe the details of your ${logType}...`} 
+                    className="w-full min-h-[120px] px-5 py-4 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 resize-none text-white placeholder:text-white/10 mb-4" 
                   />
+                  <div className="flex justify-end">
+                    <button 
+                      onClick={() => handleLogActivity()} 
+                      disabled={!newLog.trim()} 
+                      className="flex items-center gap-2 bg-white text-[#161616] px-6 py-3 rounded-[6px] text-[11px] font-black hover:opacity-90 transition-all disabled:opacity-20 uppercase tracking-widest cursor-pointer"
+                    >
+                      <Send className="w-4 h-4" /> COMMIT LOG
+                    </button>
+                  </div>
                 </div>
+              ) : (
+                // Zoho Email Composer Tab
+                isZohoLinked && (
+                  <div className="bg-[#161616] rounded-[6px] p-6 shadow-xl">
+                    <h3 className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-5">Compose & Send Zoho Email</h3>
+                    <div className="mb-4">
+                      <input
+                        type="text"
+                        placeholder="Email Subject..."
+                        value={emailSubject}
+                        onChange={e => setEmailSubject(e.target.value)}
+                        className="w-full px-5 py-3 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 text-white placeholder:text-white/20 font-bold"
+                      />
+                    </div>
+                    <textarea 
+                      value={newLog} 
+                      onChange={(e) => setNewLog(e.target.value)} 
+                      placeholder="Write your email body..." 
+                      className="w-full min-h-[160px] px-5 py-4 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 resize-none text-white placeholder:text-white/10 mb-4" 
+                    />
+                    <div className="flex justify-end">
+                      <button 
+                        onClick={async () => {
+                          await handleLogActivity('zoho');
+                        }}
+                        disabled={!newLog.trim() || isSendingEmail} 
+                        className="flex items-center gap-2 bg-white text-[#161616] px-6 py-3 rounded-[6px] text-[11px] font-black hover:opacity-90 transition-all disabled:opacity-20 uppercase tracking-widest cursor-pointer"
+                      >
+                        <Send className="w-4 h-4" /> 
+                        {isSendingEmail ? 'SENDING...' : 'SEND ZOHO EMAIL'}
+                      </button>
+                    </div>
+                  </div>
+                )
               )}
-              <textarea 
-                value={newLog} 
-                onChange={(e) => setNewLog(e.target.value)} 
-                placeholder={`Describe the details of your ${logType}...`} 
-                className="w-full min-h-[120px] px-5 py-4 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 resize-none text-white placeholder:text-white/10 mb-4" 
-              />
-              <div className="flex justify-end">
-                <button 
-                  onClick={handleLogActivity} 
-                  disabled={!newLog.trim() || isSendingEmail} 
-                  className="flex items-center gap-2 bg-white text-[#161616] px-6 py-3 rounded-[6px] text-[11px] font-black hover:opacity-90 transition-all disabled:opacity-20 uppercase tracking-widest cursor-pointer"
-                >
-                  <Send className="w-4 h-4" /> 
-                  {isSendingEmail ? 'SENDING...' : logType === 'zoho' ? 'SEND ZOHO EMAIL' : 'COMMIT LOG'}
-                </button>
-              </div>
-            </div>
+            </>
           )}
         </div>
       </div>
