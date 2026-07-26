@@ -8,6 +8,8 @@ export interface User {
   team?: string;
   status: 'Active' | 'Inactive';
   availability: 'Available' | 'Busy' | 'Offline';
+  zohoEmail?: string;
+  zohoRefreshToken?: string;
   metrics?: {
     openLeads: number;
     openDeals: number;

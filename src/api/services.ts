@@ -128,9 +128,6 @@ export const api = {
       if (payload.nextFollowUp !== undefined) sheetPayload.NextFollowUp = payload.nextFollowUp;
       await fetchAPI('updateLead', 'POST', sheetPayload);
     },
-    delete: async (id: string): Promise<void> => {
-      await fetchAPI('deleteLead', 'POST', { id });
-    },
     convertToDeal: async (leadId: string, userId: string, value: number): Promise<Deal> => {
       const lead = await api.leads.getById(leadId);
       const deal = await api.deals.create({
@@ -299,6 +296,8 @@ export const api = {
         return data.map((row: any) => ({
           id: String(row.ID || ''), username: String(row.Username || 'Unknown'), password: row.Password ? String(row.Password) : '', role: row.Role || 'SALES_REP', team: row.Team || '', 
           status: row.Status || 'Inactive', availability: row.Availability || 'Offline',
+          zohoEmail: row.ZohoEmail || '',
+          zohoRefreshToken: row.ZohoRefreshToken || '',
           metrics: row.Metrics ? JSON.parse(row.Metrics) : undefined
         }));
       } catch (err) {
@@ -326,6 +325,12 @@ export const api = {
     },
     delete: async (id: string): Promise<void> => {
       await fetchAPI('deleteUser', 'POST', { id });
+    },
+    linkZoho: async (id: string, redirectUri: string, code: string): Promise<void> => {
+      await fetchAPI('linkZoho', 'POST', { id, redirectUri, code });
+    },
+    unlinkZoho: async (id: string): Promise<void> => {
+      await fetchAPI('unlinkZoho', 'POST', { id });
     }
   },
 
@@ -413,6 +418,22 @@ export const api = {
         Metadata: payload.metadata || ''
       };
       await fetchAPI('createLog', 'POST', sheetPayload);
+    }
+  },
+
+  zoho: {
+    getEmails: async (leadEmail: string, userId: string): Promise<any[]> => {
+      try {
+        const data = await fetchAPI('getZohoEmails', 'GET', null, { leadEmail, userId });
+        if (!Array.isArray(data)) return [];
+        return data;
+      } catch (err) {
+        console.error(err);
+        return [];
+      }
+    },
+    sendEmail: async (userId: string, to: string, subject: string, content: string): Promise<void> => {
+      await fetchAPI('sendZohoEmail', 'POST', { userId, to, subject, content });
     }
   }
 };

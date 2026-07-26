@@ -248,6 +248,63 @@ export const Dashboard: React.FC = () => {
 
         {/* Right Column */}
         <div className="flex flex-col gap-6">
+          {/* Zoho Mail Connection Card */}
+          {user && (
+            <div className="bg-white border border-[#DFDFDF] rounded-[8px] p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-[11px] font-black text-[#161616]/30 uppercase tracking-[0.2em]">Zoho Integration</h3>
+                <Mail className="w-4 h-4 text-[#161616]/20" />
+              </div>
+              {(() => {
+                const fullUser = allUsers.find(u => u.id === user.id);
+                const isLinked = fullUser?.zohoEmail || fullUser?.zohoRefreshToken;
+                
+                if (isLinked) {
+                  return (
+                    <div className="space-y-4">
+                      <div className="bg-green-50 border border-green-200 rounded-[6px] p-3 text-left">
+                        <p className="text-[9px] font-black text-green-700 uppercase tracking-widest mb-1">Status: Connected ✓</p>
+                        <p className="text-xs text-green-900 font-bold truncate">@{fullUser?.zohoEmail || fullUser?.username}</p>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm("Unlink Zoho Mail from CRM?")) return;
+                          try {
+                            await api.users.unlinkZoho(user.id);
+                            alert("Zoho Mail account unlinked.");
+                            window.location.reload();
+                          } catch {
+                            alert("Failed to unlink Zoho account.");
+                          }
+                        }}
+                        className="w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-all cursor-pointer"
+                      >
+                        Disconnect Zoho Mail
+                      </button>
+                    </div>
+                  );
+                }
+
+                const client_id = "1000.TPZZG4KWERXN232O5CWEUG3G2KMYVX";
+                const redirect_uri = encodeURIComponent(window.location.origin + '/oauth/callback');
+                const scope = encodeURIComponent("ZohoMail.accounts.READ,ZohoMail.messages.READ,ZohoMail.messages.CREATE");
+                const authUrl = `https://accounts.zoho.in/oauth/v2/auth?scope=${scope}&client_id=${client_id}&response_type=code&redirect_uri=${redirect_uri}&access_type=offline&prompt=consent`;
+
+                return (
+                  <div className="space-y-3">
+                    <p className="text-xs text-[#161616]/60 leading-relaxed font-medium">Link your Zoho Business Mail to view communications and send mail directly from the CRM.</p>
+                    <a
+                      href={authUrl}
+                      className="w-full bg-[#161616] text-white py-2.5 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-all flex items-center justify-center gap-2"
+                    >
+                      Connect Zoho Mail
+                    </a>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
           {/* Urgent Actions Overlay */}
           <div className="bg-[#161616] rounded-[8px] p-6 shadow-2xl relative overflow-hidden">
             <h3 className="text-[11px] font-black text-white/30 uppercase tracking-[0.2em] mb-6">Pending Authorizations</h3>

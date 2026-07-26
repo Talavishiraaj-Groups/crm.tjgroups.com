@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { 
   ArrowLeft, Phone, Mail, MessageSquare, Calendar, 
   DollarSign, FileText, User as UserIcon, Send, CheckCircle, Clock,
-  ExternalLink, ShieldAlert, Trash2
+  ExternalLink, ShieldAlert
 } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 
@@ -20,11 +20,16 @@ export const LeadDetail: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [newLog, setNewLog] = useState('');
-  const [logType, setLogType] = useState<'call' | 'message' | 'email'>('call');
-  
   // Conversion state
   const [isConverting, setIsConverting] = useState(false);
   const [dealValue, setDealValue] = useState(0);
+
+  // Zoho Mail States
+  const [zohoEmails, setZohoEmails] = useState<any[]>([]);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isZohoLinked, setIsZohoLinked] = useState(false);
+  const [logType, setLogType] = useState<'call' | 'message' | 'email' | 'zoho'>('call');
 
   const fetchData = async () => {
     if (id) {
@@ -44,6 +49,17 @@ export const LeadDetail: React.FC = () => {
         
         // Filter requests related to this lead (by relatedDealId)
         setRequests((requestsData || []).filter(r => r.relatedDealId === id));
+
+        // Check if logged-in user is Zoho connected, then load emails
+        const currentUserObj = usersData.find(u => u.id === user?.id);
+        if (currentUserObj?.zohoRefreshToken && leadData?.email && user) {
+          setIsZohoLinked(true);
+          api.zoho.getEmails(leadData.email, user.id).then(emailsData => {
+            setAllEmails(emailsData || []);
+          });
+        } else {
+          setIsZohoLinked(false);
+        }
       } catch (err) {
         console.error('Failed to fetch data:', err);
       } finally {
@@ -52,25 +68,54 @@ export const LeadDetail: React.FC = () => {
     }
   };
 
+  // Helper hook state for setting emails safely
+  const setAllEmails = (emails: any[]) => {
+    setZohoEmails(emails);
+  };
+
   useEffect(() => {
     fetchData();
   }, [id]);
 
   const handleLogActivity = async () => {
     if (!newLog.trim() || !id || !user) return;
+    setIsSendingEmail(true);
     try {
-      await api.logs.create({
-        entityId: id,
-        entityType: 'Lead',
-        action: logType.toUpperCase(),
-        userId: user.id,
-        details: newLog
-      });
+      if (logType === 'zoho') {
+        if (!emailSubject.trim()) {
+          alert('Please enter an email subject.');
+          setIsSendingEmail(false);
+          return;
+        }
+        // Send Zoho API mail
+        await api.zoho.sendEmail(user.id, lead?.email || '', emailSubject, newLog);
+        
+        // Log it as standard CRM activity
+        await api.logs.create({
+          entityId: id,
+          entityType: 'Lead',
+          action: 'EMAIL',
+          userId: user.id,
+          details: `Sent email via Zoho: [Subject: ${emailSubject}] ${newLog}`
+        });
+
+        setEmailSubject('');
+      } else {
+        await api.logs.create({
+          entityId: id,
+          entityType: 'Lead',
+          action: logType.toUpperCase(),
+          userId: user.id,
+          details: newLog
+        });
+      }
       setNewLog('');
       fetchData();
     } catch (err: any) {
       console.error(err);
-      alert('Failed to log activity: ' + (err.message || 'Check your connection'));
+      alert('Failed to submit: ' + (err.message || 'Check your connection'));
+    } finally {
+      setIsSendingEmail(false);
     }
   };
 
@@ -144,18 +189,6 @@ export const LeadDetail: React.FC = () => {
     }
   };
 
-  const handleDeleteLead = async () => {
-    if (!lead) return;
-    if (!window.confirm(`Are you sure you want to delete lead "${lead.name}" permanently?`)) return;
-    try {
-      await api.leads.delete(lead.id);
-      navigate('/leads');
-    } catch (err) {
-      console.error(err);
-      alert("Failed to delete lead.");
-    }
-  };
-
   if (isLoading) return (
     <div className="flex flex-col items-center justify-center py-20 gap-4">
       <div className="w-8 h-8 border-2 border-[#161616] border-t-transparent rounded-full animate-spin"></div>
@@ -213,14 +246,6 @@ export const LeadDetail: React.FC = () => {
                 {isConverting ? '...' : 'CONVERT'}
               </button>
             </div>
-          )}
-          {(role === 'SUPER_ADMIN' || role === 'ADMIN') && (
-            <button 
-              onClick={handleDeleteLead}
-              className="flex items-center gap-2 border border-red-200 text-red-500 hover:text-red-700 bg-red-50 px-4 py-2 rounded-[6px] text-xs font-bold hover:bg-red-100 transition-all cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" /> DELETE LEAD
-            </button>
           )}
         </div>
       </div>
@@ -396,27 +421,59 @@ export const LeadDetail: React.FC = () => {
             <h3 className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest mb-8">Activity Feed</h3>
             <div className="flex flex-col gap-8 relative ml-2">
               <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[#DFDFDF]"></div>
-              {logs.length === 0 ? (
-                <div className="text-[11px] text-[#161616]/30 italic ml-6">No interactions recorded for this lead.</div>
-              ) : (
-                logs.slice().reverse().map((item) => (
+              {(() => {
+                const combinedFeed = [
+                  ...logs.map(l => ({
+                    id: l.id,
+                    action: l.action,
+                    userId: l.userId,
+                    details: l.details,
+                    timestamp: l.timestamp,
+                    isZoho: false
+                  })),
+                  ...zohoEmails.map(e => ({
+                    id: e.id,
+                    action: e.direction === 'in' ? 'EMAIL RECEIVED' : 'EMAIL SENT',
+                    userId: e.direction === 'in' ? 'client' : user?.id || 'me',
+                    details: `Subject: ${e.subject}\n\n${e.content}`,
+                    timestamp: e.timestamp,
+                    isZoho: true
+                  }))
+                ];
+
+                combinedFeed.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+                if (combinedFeed.length === 0) {
+                  return <div className="text-[11px] text-[#161616]/30 italic ml-6">No interactions recorded for this lead.</div>;
+                }
+
+                return combinedFeed.reverse().map((item) => (
                   <div key={item.id} className="flex gap-6 relative group">
-                    <div className={`w-3.5 h-3.5 rounded-full shrink-0 mt-1 z-10 border-2 transition-all group-hover:scale-125 ${item.action === 'SYSTEM' || item.action === 'STATUS_CHANGE' ? 'border-[#DFDFDF] bg-white' : 'border-[#161616] bg-[#161616]'}`}></div>
+                    <div className={`w-3.5 h-3.5 rounded-full shrink-0 mt-1 z-10 border-2 transition-all group-hover:scale-125 ${
+                      item.action.includes('SYSTEM') || item.action.includes('STATUS_CHANGE') 
+                        ? 'border-[#DFDFDF] bg-white' 
+                        : item.isZoho 
+                          ? 'border-blue-500 bg-blue-500 shadow-sm'
+                          : 'border-[#161616] bg-[#161616]'
+                    }`}></div>
                     <div className="flex-1">
                       <div className="flex justify-between items-baseline mb-2">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-black text-[#161616] uppercase tracking-wider">{item.action}</span>
-                          <span className="text-[10px] font-bold text-[#161616]/40 uppercase">by {item.userId === user?.id ? 'You' : getUsername(item.userId)}</span>
+                          <span className={`text-xs font-black uppercase tracking-wider ${item.isZoho ? 'text-blue-600' : 'text-[#161616]'}`}>{item.action}</span>
+                          {item.isZoho && <span className="text-[8px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-[3px] uppercase tracking-wider">Zoho Mail</span>}
+                          <span className="text-[10px] font-bold text-[#161616]/40 uppercase">
+                            by {item.userId === 'client' ? 'Client' : item.userId === user?.id ? 'You' : getUsername(item.userId)}
+                          </span>
                         </div>
                         <span className="text-[10px] font-mono text-[#161616]/30">{new Date(item.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
                       </div>
-                      <div className={`bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] p-4 text-sm text-[#161616]/70 leading-relaxed ${item.action === 'GUIDANCE' ? 'border-l-4 border-l-[#161616]' : ''}`}>
+                      <div className={`bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] p-4 text-sm text-[#161616]/70 leading-relaxed whitespace-pre-wrap ${item.action === 'GUIDANCE' ? 'border-l-4 border-l-[#161616]' : ''} ${item.isZoho ? 'border-l-4 border-l-blue-500 bg-blue-50/10' : ''}`}>
                         {item.details}
                       </div>
                     </div>
                   </div>
-                ))
-              )}
+                ));
+              })()}
             </div>
           </div>
 
@@ -425,16 +482,34 @@ export const LeadDetail: React.FC = () => {
             <div className="bg-[#161616] rounded-[6px] p-6 shadow-xl">
               <h3 className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-5">Log New Interaction</h3>
               <div className="flex gap-3 mb-5">
-                {([{ key: 'call', icon: Phone, label: 'Call' }, { key: 'message', icon: MessageSquare, label: 'WhatsApp' }, { key: 'email', icon: Mail, label: 'Email' }] as const).map(({ key, icon: Icon, label }) => (
+                {([
+                  { key: 'call', icon: Phone, label: 'Call' }, 
+                  { key: 'message', icon: MessageSquare, label: 'WhatsApp' }, 
+                  { key: 'email', icon: Mail, label: 'Email (Note)' },
+                  ...(isZohoLinked ? [{ key: 'zoho', icon: Mail, label: 'Send Zoho Email' }] : [])
+                ] as const).map(({ key, icon: Icon, label }) => (
                   <button 
                     key={key} 
+                    type="button"
                     onClick={() => setLogType(key)} 
-                    className={`flex items-center gap-2 px-4 py-2 rounded-[6px] text-[11px] font-black transition-all uppercase tracking-widest ${logType === key ? 'bg-white text-[#161616]' : 'border border-white/10 text-white/40 hover:border-white/30 hover:text-white'}`}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-[6px] text-[11px] font-black transition-all uppercase tracking-widest cursor-pointer ${logType === key ? 'bg-white text-[#161616]' : 'border border-white/10 text-white/40 hover:border-white/30 hover:text-white'}`}
                   >
                     <Icon className="w-3.5 h-3.5" />{label}
                   </button>
                 ))}
               </div>
+
+              {logType === 'zoho' && (
+                <div className="mb-4">
+                  <input
+                    type="text"
+                    placeholder="Email Subject..."
+                    value={emailSubject}
+                    onChange={e => setEmailSubject(e.target.value)}
+                    className="w-full px-5 py-3 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 text-white placeholder:text-white/20 font-bold"
+                  />
+                </div>
+              )}
               <textarea 
                 value={newLog} 
                 onChange={(e) => setNewLog(e.target.value)} 
@@ -444,10 +519,11 @@ export const LeadDetail: React.FC = () => {
               <div className="flex justify-end">
                 <button 
                   onClick={handleLogActivity} 
-                  disabled={!newLog.trim()} 
-                  className="flex items-center gap-2 bg-white text-[#161616] px-6 py-3 rounded-[6px] text-[11px] font-black hover:opacity-90 transition-all disabled:opacity-20 uppercase tracking-widest"
+                  disabled={!newLog.trim() || isSendingEmail} 
+                  className="flex items-center gap-2 bg-white text-[#161616] px-6 py-3 rounded-[6px] text-[11px] font-black hover:opacity-90 transition-all disabled:opacity-20 uppercase tracking-widest cursor-pointer"
                 >
-                  <Send className="w-4 h-4" /> COMMIT LOG
+                  <Send className="w-4 h-4" /> 
+                  {isSendingEmail ? 'SENDING...' : logType === 'zoho' ? 'SEND ZOHO EMAIL' : 'COMMIT LOG'}
                 </button>
               </div>
             </div>

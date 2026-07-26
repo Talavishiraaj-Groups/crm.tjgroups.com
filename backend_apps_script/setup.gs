@@ -11,8 +11,8 @@ const MAIN_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('MAIN
 
 // Define the core tables and their headers
 const DATABASE_SCHEMA = {
-  'Users': ['ID', 'Username', 'Role', 'Team', 'Status', 'Availability', 'CreatedAt', 'UpdatedAt'],
-  'Leads': ['ID', 'Name', 'Email', 'Phone', 'Status', 'OwnerRepId', 'SetterId', 'CloserId', 'Notes', 'Linkedin', 'CreatedAt', 'UpdatedAt'],
+  'Users': ['ID', 'Username', 'Role', 'Team', 'Status', 'Availability', 'ZohoEmail', 'ZohoRefreshToken', 'CreatedAt', 'UpdatedAt'],
+  'Leads': ['ID', 'Name', 'Email', 'Phone', 'Status', 'OwnerRepId', 'SetterId', 'CloserId', 'Notes', 'Linkedin', 'NextFollowUp', 'CreatedAt', 'UpdatedAt'],
   'Deals': ['ID', 'LeadId', 'Value', 'Status', 'OwnerRepId', 'SetterId', 'CloserId', 'CreatedAt', 'UpdatedAt'],
   'Projects': ['ID', 'ClientName', 'Status', 'OwnerRepId', 'AccountManagerId', 'LiaisonId', 'StartDate', 'DueDate', 'CreatedAt', 'UpdatedAt'],
   'AdminRequests': ['ID', 'Type', 'RelatedDealId', 'RequestedBy', 'Status', 'CreatedAt', 'UpdatedAt'],

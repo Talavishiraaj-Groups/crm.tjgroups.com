@@ -14,6 +14,7 @@ import { AdminPage } from './pages/AdminPage';
 import { GuidePage } from './pages/GuidePage';
 import { MeetingsPage } from './pages/MeetingsPage';
 import { DailyLogsPage } from './pages/DailyLogsPage';
+import { OAuthCallbackPage } from './pages/OAuthCallbackPage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode; roles?: string[] }> = ({ children, roles }) => {
   const { user, isLoading, role } = useAuth();
@@ -55,6 +56,7 @@ function AppRoutes() {
           <Route path="payments" element={<PaymentsPage />} />
           <Route path="meetings" element={<MeetingsPage />} />
           <Route path="daily-logs" element={<DailyLogsPage />} />
+          <Route path="oauth/callback" element={<OAuthCallbackPage />} />
           <Route path="guide" element={<GuidePage />} />
 
           {/* Admin + Super Admin */}

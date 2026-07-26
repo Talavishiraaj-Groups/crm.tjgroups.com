@@ -47,6 +47,10 @@ function doGet(e) {
       case 'getLogs':
         data = getLogs(id);
         break;
+      case 'getZohoEmails':
+        // e.parameter contains leadEmail and userId
+        data = getZohoEmails(e.parameter);
+        break;
       default:
         return createErrorResponse('Unknown action: ' + action);
     }
@@ -111,11 +115,14 @@ function doPost(e) {
         payload.Timestamp = new Date().toISOString();
         result = createRecord('Logs', payload);
         break;
-      case 'deleteUser':
-        result = deleteRecord('Users', payload.id);
+      case 'linkZoho':
+        result = linkZoho(payload);
         break;
-      case 'deleteLead':
-        result = deleteRecord('Leads', payload.id);
+      case 'unlinkZoho':
+        result = unlinkZoho(payload);
+        break;
+      case 'sendZohoEmail':
+        result = sendZohoEmail(payload);
         break;
       default:
         return createErrorResponse('Unknown action: ' + action);
