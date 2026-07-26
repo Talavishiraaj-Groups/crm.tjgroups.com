@@ -482,21 +482,26 @@ export const LeadDetail: React.FC = () => {
             <div className="bg-[#161616] rounded-[6px] p-6 shadow-xl">
               <h3 className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-5">Log New Interaction</h3>
               <div className="flex gap-3 mb-5">
-                {([
-                  { key: 'call', icon: Phone, label: 'Call' }, 
-                  { key: 'message', icon: MessageSquare, label: 'WhatsApp' }, 
-                  { key: 'email', icon: Mail, label: 'Email (Note)' },
-                  ...(isZohoLinked ? [{ key: 'zoho', icon: Mail, label: 'Send Zoho Email' }] : [])
-                ] as const).map(({ key, icon: Icon, label }) => (
-                  <button 
-                    key={key} 
-                    type="button"
-                    onClick={() => setLogType(key)} 
-                    className={`flex items-center gap-2 px-4 py-2 rounded-[6px] text-[11px] font-black transition-all uppercase tracking-widest cursor-pointer ${logType === key ? 'bg-white text-[#161616]' : 'border border-white/10 text-white/40 hover:border-white/30 hover:text-white'}`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />{label}
-                  </button>
-                ))}
+                {(() => {
+                  const logOptions: { key: 'call' | 'message' | 'email' | 'zoho'; icon: any; label: string }[] = [
+                    { key: 'call', icon: Phone, label: 'Call' }, 
+                    { key: 'message', icon: MessageSquare, label: 'WhatsApp' }, 
+                    { key: 'email', icon: Mail, label: 'Email (Note)' }
+                  ];
+                  if (isZohoLinked) {
+                    logOptions.push({ key: 'zoho', icon: Mail, label: 'Send Zoho Email' });
+                  }
+                  return logOptions.map(({ key, icon: Icon, label }) => (
+                    <button 
+                      key={key} 
+                      type="button"
+                      onClick={() => setLogType(key)} 
+                      className={`flex items-center gap-2 px-4 py-2 rounded-[6px] text-[11px] font-black transition-all uppercase tracking-widest cursor-pointer ${logType === key ? 'bg-white text-[#161616]' : 'border border-white/10 text-white/40 hover:border-white/30 hover:text-white'}`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />{label}
+                    </button>
+                  ));
+                })()}
               </div>
 
               {logType === 'zoho' && (
