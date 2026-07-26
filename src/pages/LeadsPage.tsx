@@ -319,34 +319,39 @@ export const LeadsPage: React.FC = () => {
 
       {/* Leads Page Filters panel */}
       {!isLoading && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-white border border-[#DFDFDF] rounded-[10px] p-4 shadow-sm">
-          {/* Setter Filter */}
-          <div className="relative">
-            <select
-              value={selectedSetter}
-              onChange={e => setSelectedSetter(e.target.value)}
-              className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
-            >
-              <option value="all">Filter by Setter: All</option>
-              {users.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN')).map(u => (
-                <option key={u.id} value={u.id}>@{u.username}</option>
-              ))}
-            </select>
-          </div>
+        <div className={`grid grid-cols-1 ${role === 'SUPER_ADMIN' || role === 'ADMIN' ? 'md:grid-cols-3' : 'md:grid-cols-1'} gap-3 bg-white border border-[#DFDFDF] rounded-[10px] p-4 shadow-sm`}>
+          {/* Setter & Closer Filters — Only visible to SUPER_ADMIN & ADMIN */}
+          {(role === 'SUPER_ADMIN' || role === 'ADMIN') && (
+            <>
+              {/* Setter Filter */}
+              <div className="relative">
+                <select
+                  value={selectedSetter}
+                  onChange={e => setSelectedSetter(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
+                >
+                  <option value="all">Filter by Setter: All</option>
+                  {users.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN')).map(u => (
+                    <option key={u.id} value={u.id}>@{u.username}</option>
+                  ))}
+                </select>
+              </div>
 
-          {/* Closer Filter */}
-          <div className="relative">
-            <select
-              value={selectedCloser}
-              onChange={e => setSelectedCloser(e.target.value)}
-              className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
-            >
-              <option value="all">Filter by Closer: All</option>
-              {users.filter(u => u.status === 'Active' && (u.role === 'SALES_REP' || u.role === 'ADMIN')).map(u => (
-                <option key={u.id} value={u.id}>@{u.username}</option>
-              ))}
-            </select>
-          </div>
+              {/* Closer Filter */}
+              <div className="relative">
+                <select
+                  value={selectedCloser}
+                  onChange={e => setSelectedCloser(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
+                >
+                  <option value="all">Filter by Closer: All</option>
+                  {users.filter(u => u.status === 'Active' && (u.role === 'SALES_REP' || u.role === 'ADMIN')).map(u => (
+                    <option key={u.id} value={u.id}>@{u.username}</option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
 
           {/* Next Follow Up Date Filter */}
           <div className="relative">
@@ -364,6 +369,7 @@ export const LeadsPage: React.FC = () => {
           </div>
         </div>
       )}
+
       <div className="flex gap-1 bg-[#F9F9F9] p-1.5 rounded-[8px] border border-[#DFDFDF] w-fit shadow-inner">
         {statuses.map((s) => (
           <button
