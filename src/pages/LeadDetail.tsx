@@ -58,7 +58,21 @@ export const LeadDetail: React.FC = () => {
         if (currentUserObj?.zohoRefreshToken && leadData?.email && user) {
           setIsZohoLinked(true);
           api.zoho.getEmails(leadData.email, user.id).then(emailsData => {
-            setAllEmails(emailsData || []);
+            const fetched = emailsData || [];
+            setZohoEmails(fetched);
+            
+            // Requirement 4: Auto-shift lead status to Contacted if email activity exists & status is New
+            if (leadData.status === 'New' && fetched.length > 0 && id && user) {
+              api.leads.update(id, { status: 'Contacted' }).catch(() => {});
+              api.logs.create({
+                entityId: id,
+                entityType: 'Lead',
+                action: 'STATUS_CHANGE',
+                userId: user.id,
+                details: 'Lead status automatically shifted to Contacted due to Zoho Email communication.'
+              }).catch(() => {});
+              setLead(prev => prev ? { ...prev, status: 'Contacted' } : null);
+            }
           });
         } else {
           setIsZohoLinked(false);
@@ -71,9 +85,56 @@ export const LeadDetail: React.FC = () => {
     }
   };
 
-  // Helper hook state for setting emails safely
-  const setAllEmails = (emails: any[]) => {
-    setZohoEmails(emails);
+  const todayStr = new Date().toISOString().split('T')[0];
+  const maxFollowUpDateStr = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    return d.toISOString().split('T')[0];
+  })();
+
+  const handleSetFollowUpDays = async (days: number) => {
+    if (!id || !user || !lead) return;
+    const target = new Date();
+    target.setDate(target.getDate() + days);
+    const dateStr = target.toISOString().split('T')[0];
+    
+    try {
+      await api.leads.update(id, { nextFollowUp: dateStr });
+      await api.logs.create({
+        entityId: id,
+        entityType: 'Lead',
+        action: 'STATUS_CHANGE',
+        userId: user.id,
+        details: `Updated Next Follow-Up date to ${dateStr}`
+      });
+      setLead(prev => prev ? { ...prev, nextFollowUp: dateStr } : null);
+    } catch (err) {
+      console.error('Failed to update follow up date:', err);
+    }
+  };
+
+  const handleCustomFollowUpDate = async (selectedDateStr: string) => {
+    if (!id || !user || !lead) return;
+    if (!selectedDateStr) return;
+    let finalDateStr = selectedDateStr;
+    if (selectedDateStr > maxFollowUpDateStr) {
+      alert(`Follow-up date cannot be more than 3 days into the future. Auto-adjusting to max allowed (${maxFollowUpDateStr}).`);
+      finalDateStr = maxFollowUpDateStr;
+    }
+    
+    try {
+      await api.leads.update(id, { nextFollowUp: finalDateStr });
+      await api.logs.create({
+        entityId: id,
+        entityType: 'Lead',
+        action: 'STATUS_CHANGE',
+        userId: user.id,
+        details: `Updated Next Follow-Up date to ${finalDateStr}`
+      });
+      setLead(prev => prev ? { ...prev, nextFollowUp: finalDateStr } : null);
+    } catch (err) {
+      console.error('Failed to update follow up date:', err);
+    }
   };
 
   useEffect(() => {
@@ -319,6 +380,77 @@ export const LeadDetail: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {/* Next Follow-Up Schedule Card (Max 3 Days Rule) */}
+          <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[10px] font-black text-[#161616] uppercase tracking-widest flex items-center gap-2">
+                <Calendar className="w-3.5 h-3.5 text-[#161616]/40" /> Next Follow-Up
+              </h3>
+              {lead.nextFollowUp ? (
+                (() => {
+                  const dateVal = lead.nextFollowUp.split('T')[0];
+                  return (
+                    <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                      dateVal < todayStr 
+                        ? 'bg-red-100 text-red-700 border border-red-200 animate-pulse' 
+                        : dateVal === todayStr 
+                        ? 'bg-amber-100 text-amber-700 border border-amber-200' 
+                        : 'bg-green-100 text-green-700 border border-green-200'
+                    }`}>
+                      {dateVal < todayStr ? 'OVERDUE' : dateVal === todayStr ? 'DUE TODAY' : 'SCHEDULED'}
+                    </span>
+                  );
+                })()
+              ) : (
+
+                <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500">
+                  UNSET
+                </span>
+              )}
+            </div>
+
+            <div className="p-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] flex items-center justify-between">
+              <span className="text-xs font-bold text-[#161616]">
+                {lead.nextFollowUp ? lead.nextFollowUp.split('T')[0] : 'No follow-up date set'}
+              </span>
+              <input 
+                type="date"
+                min={todayStr}
+                max={maxFollowUpDateStr}
+                value={lead.nextFollowUp ? lead.nextFollowUp.split('T')[0] : ''}
+                onChange={e => handleCustomFollowUpDate(e.target.value)}
+                className="text-xs border border-[#DFDFDF] rounded px-2 py-1 bg-white font-medium focus:outline-none cursor-pointer"
+              />
+            </div>
+
+
+            {/* Quick Presets (+1d, +2d, +3d max) */}
+            <div>
+              <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-2">Quick Presets (Max 3 Days)</p>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  onClick={() => handleSetFollowUpDays(1)}
+                  className="py-1.5 px-2 bg-white border border-[#DFDFDF] hover:border-[#161616] text-[#161616] rounded text-[10px] font-black uppercase transition-all cursor-pointer text-center"
+                >
+                  +1 Day
+                </button>
+                <button
+                  onClick={() => handleSetFollowUpDays(2)}
+                  className="py-1.5 px-2 bg-white border border-[#DFDFDF] hover:border-[#161616] text-[#161616] rounded text-[10px] font-black uppercase transition-all cursor-pointer text-center"
+                >
+                  +2 Days
+                </button>
+                <button
+                  onClick={() => handleSetFollowUpDays(3)}
+                  className="py-1.5 px-2 bg-white border border-[#DFDFDF] hover:border-[#161616] text-[#161616] rounded text-[10px] font-black uppercase transition-all cursor-pointer text-center"
+                >
+                  +3 Days
+                </button>
+              </div>
+            </div>
+          </div>
+
 
           {/* Admin Requests Status */}
           {requests.length > 0 && (

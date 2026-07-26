@@ -451,18 +451,35 @@ export const LeadsPage: React.FC = () => {
                     <td className="px-6 py-5" onClick={(e) => e.stopPropagation()}>
                       <div className="relative flex items-center">
                         <Bell className="w-3 h-3 text-[#161616]/20 absolute left-2 pointer-events-none" />
-                        <input
-                          type="date"
-                          defaultValue={lead.nextFollowUp ? lead.nextFollowUp.split('T')[0] : ''}
-                          onChange={async (e) => {
-                            const val = e.target.value;
-                            await api.leads.update(lead.id, { nextFollowUp: val });
-                            setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, nextFollowUp: val } : l));
-                          }}
-                          className="pl-7 pr-2 py-1.5 text-[10px] font-bold text-[#161616]/60 border border-[#DFDFDF] rounded-[4px] bg-[#F9F9F9] focus:outline-none focus:border-[#161616] w-[130px] cursor-pointer"
-                        />
+                        {(() => {
+                          const todayStr = new Date().toISOString().split('T')[0];
+                          const maxDate = new Date();
+                          maxDate.setDate(maxDate.getDate() + 3);
+                          const maxFollowUpDateStr = maxDate.toISOString().split('T')[0];
+                          const dateVal = lead.nextFollowUp ? lead.nextFollowUp.split('T')[0] : '';
+                          
+                          return (
+                            <input
+                              type="date"
+                              min={todayStr}
+                              max={maxFollowUpDateStr}
+                              value={dateVal}
+                              onChange={async (e) => {
+                                let val = e.target.value;
+                                if (val && val > maxFollowUpDateStr) {
+                                  alert(`Follow-up date cannot be more than 3 days into the future. Setting to max allowed (${maxFollowUpDateStr}).`);
+                                  val = maxFollowUpDateStr;
+                                }
+                                await api.leads.update(lead.id, { nextFollowUp: val });
+                                setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, nextFollowUp: val } : l));
+                              }}
+                              className="pl-7 pr-2 py-1.5 text-[10px] font-bold text-[#161616]/60 border border-[#DFDFDF] rounded-[4px] bg-[#F9F9F9] focus:outline-none focus:border-[#161616] w-[130px] cursor-pointer"
+                            />
+                          );
+                        })()}
                       </div>
                     </td>
+
                     <td className="px-6 py-5">
                       <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         {lead.status !== 'Converted' && lead.status !== 'Closed' && (

@@ -121,6 +121,10 @@ export const Dashboard: React.FC = () => {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
 
+  const todayStr = new Date().toISOString().split('T')[0];
+  const overdueFollowUps = myLeads.filter(l => l.nextFollowUp && l.nextFollowUp < todayStr);
+  const todayFollowUps = myLeads.filter(l => l.nextFollowUp && l.nextFollowUp === todayStr);
+
   const kpis = [
     { label: 'Active Leads', value: myLeads.length, sub: 'Total assigned', path: '/leads', icon: Users },
     { label: 'Open Deals', value: myDeals.filter((d) => isDealOpen(d.status)).length, sub: `$${openDealsValue.toLocaleString()} value`, path: '/deals', icon: Briefcase },
@@ -139,6 +143,27 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-8">
+      {/* Top Priority Reminder Alert Banner */}
+      {overdueFollowUps.length > 0 && (
+        <div className="bg-red-500 text-white p-4 rounded-[8px] flex items-center justify-between shadow-xl animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-full">
+              <AlertCircle className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h4 className="text-xs font-black uppercase tracking-widest">Urgent Action Required: {overdueFollowUps.length} Overdue Follow-up(s)</h4>
+              <p className="text-[11px] text-white/80 font-medium">You have leads requiring immediate attention. Prioritize reaching out to maintain conversion SLAs.</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => navigate('/leads')}
+            className="bg-white text-red-600 px-4 py-2 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:bg-red-50 transition-all cursor-pointer shrink-0"
+          >
+            Review Leads →
+          </button>
+        </div>
+      )}
+
       {/* Header Section */}
       <div className="flex justify-between items-end">
         <div>
@@ -177,6 +202,60 @@ export const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Activity & Log Section */}
         <div className="lg:col-span-2 flex flex-col gap-6">
+          {/* Priority Follow-ups & Reminders Card */}
+          <div className="bg-white border border-[#DFDFDF] rounded-[8px] overflow-hidden shadow-sm">
+            <div className="flex justify-between items-center px-6 py-5 border-b border-[#DFDFDF] bg-[#F9F9F9]">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-[#161616]/40" />
+                <h3 className="text-[11px] font-black text-[#161616] uppercase tracking-[0.2em]">Priority Follow-ups & Reminders</h3>
+              </div>
+              <span className="text-[9px] font-black px-2 py-0.5 rounded bg-[#161616] text-white uppercase tracking-widest">
+                {overdueFollowUps.length + todayFollowUps.length} Pending
+              </span>
+            </div>
+            <div className="p-0 max-h-[300px] overflow-y-auto divide-y divide-[#DFDFDF]">
+              {overdueFollowUps.length === 0 && todayFollowUps.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[#161616]/40 font-medium flex flex-col items-center gap-2">
+                  <CheckCircle2 className="w-6 h-6 text-green-500 opacity-60" />
+                  No pending follow-up reminders for today. Great job!
+                </div>
+              ) : (
+                [...overdueFollowUps, ...todayFollowUps].map(lead => {
+                  const isOverdue = lead.nextFollowUp && lead.nextFollowUp < todayStr;
+                  return (
+                    <div 
+                      key={lead.id} 
+                      className="px-6 py-4 flex items-center justify-between hover:bg-[#F9F9F9] transition-all"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className={`p-2 rounded-full ${isOverdue ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-amber-50 text-amber-600 border border-amber-200'}`}>
+                          <AlertCircle className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-bold text-[#161616]">{lead.name}</h4>
+                            <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider ${isOverdue ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'}`}>
+                              {isOverdue ? `OVERDUE (${lead.nextFollowUp})` : 'DUE TODAY'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[#161616]/50 font-medium mt-0.5">{lead.email} · {lead.phone}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => navigate(`/leads/${lead.id}`)}
+                          className="flex items-center gap-1 bg-[#161616] text-white px-3 py-1.5 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-all cursor-pointer"
+                        >
+                          View Lead <ArrowRight className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
           {/* Daily Summary Box (For Everyone) */}
           {user && (
             <div className={`rounded-[8px] p-6 border transition-all ${hasLoggedToday ? 'bg-[#F9F9F9] border-[#DFDFDF]' : 'bg-[#161616] border-[#161616] shadow-2xl'}`}>
