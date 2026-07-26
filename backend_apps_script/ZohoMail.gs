@@ -37,10 +37,17 @@ function linkZoho(payload) {
   // Get User Account Info (retrieve email address)
   var accountsUrl = "https://mail.zoho.in/api/accounts";
   var accountsRes = UrlFetchApp.fetch(accountsUrl, {
-    headers: { "Authorization": "Zoho-oauthtoken " + resData.access_token }
+    headers: { "Authorization": "Zoho-oauthtoken " + resData.access_token },
+    muteHttpExceptions: true
   });
   var accountsData = JSON.parse(accountsRes.getContentText());
-  var zohoEmail = accountsData.data[0].incomingMailAddress;
+  var acct = accountsData.data && accountsData.data[0] ? accountsData.data[0] : {};
+  // Zoho returns email under different field names depending on account type
+  var zohoEmail = acct.primaryEmailAddress || acct.incomingMailAddress || acct.mailboxAddress || acct.emailAddress || '';
+  
+  if (!zohoEmail) {
+    throw new Error("Could not retrieve Zoho email address. Raw account data: " + JSON.stringify(acct));
+  }
   
   // Save credentials to Users database sheet
   updateRecord('Users', userId, {
@@ -155,12 +162,31 @@ function sendZohoEmail(payload) {
   var content = payload.content;
   
   var userObj = getRecordById('Users', userId);
-  if (!userObj || !userObj.ZohoRefreshToken || !userObj.ZohoEmail) {
-    throw new Error("User has not linked their Zoho Mail account or Zoho Email is missing.");
+  if (!userObj || !userObj.ZohoRefreshToken) {
+    throw new Error("User has not linked their Zoho Mail account. No refresh token found.");
   }
   
-  var fromAddress = userObj.ZohoEmail;
   var accessToken = getZohoAccessToken(userObj.ZohoRefreshToken);
+  
+  // If ZohoEmail is missing from the sheet, fetch it dynamically and save it
+  var fromAddress = userObj.ZohoEmail;
+  if (!fromAddress) {
+    var acctUrl = "https://mail.zoho.in/api/accounts";
+    var acctRes = UrlFetchApp.fetch(acctUrl, {
+      headers: { "Authorization": "Zoho-oauthtoken " + accessToken },
+      muteHttpExceptions: true
+    });
+    var acctData = JSON.parse(acctRes.getContentText());
+    var acct = acctData.data && acctData.data[0] ? acctData.data[0] : {};
+    fromAddress = acct.primaryEmailAddress || acct.incomingMailAddress || acct.mailboxAddress || acct.emailAddress || '';
+    
+    if (!fromAddress) {
+      throw new Error("Could not determine Zoho email address. Raw: " + JSON.stringify(acct));
+    }
+    
+    // Save it to the sheet so next time we don't need to fetch
+    updateRecord('Users', userId, { ZohoEmail: fromAddress });
+  }
   
   // Get Account ID
   var accountsUrl = "https://mail.zoho.in/api/accounts";
