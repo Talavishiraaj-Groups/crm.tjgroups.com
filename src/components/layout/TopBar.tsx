@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bell, Search, Calendar, AlertCircle, Clock, CheckCircle2, ChevronRight } from 'lucide-react';
+import { Bell, Search, Calendar, AlertCircle, Clock, CheckCircle2, ChevronRight, Mail } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { ROLE_BADGE, ROLE_LABEL } from '../../utils/badges';
 import { api } from '../../api/services';
@@ -10,7 +10,7 @@ export interface NotificationItem {
   id: string;
   title: string;
   subtitle: string;
-  type: 'overdue' | 'today' | 'request';
+  type: 'overdue' | 'today' | 'request' | 'email_sent_today';
   link: string;
 }
 
@@ -31,7 +31,7 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
         // Fetch leads assigned/visible to user
         const leads: Lead[] = await api.leads.getAll(role, user.id).catch(() => []);
         
-        leads.forEach(lead => {
+        for (const lead of leads) {
           if (lead.nextFollowUp) {
             if (lead.nextFollowUp < todayStr) {
               items.push({
@@ -51,7 +51,24 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
               });
             }
           }
-        });
+
+          // Check if email was sent today for this lead
+          const logs = await api.logs.getByEntity(lead.id).catch(() => []);
+          const sentToday = logs.some(l => 
+            (l.action === 'EMAIL' || (l.details && l.details.includes('Sent email'))) && 
+            l.timestamp?.startsWith(todayStr)
+          );
+
+          if (sentToday && (!lead.nextFollowUp || lead.nextFollowUp <= todayStr)) {
+            items.push({
+              id: `email-sent-today-${lead.id}`,
+              title: `Email Sent Today: ${lead.name}`,
+              subtitle: `Mandatory: Set follow-up date (Max 3 days)`,
+              type: 'email_sent_today',
+              link: `/leads/${lead.id}`
+            });
+          }
+        }
 
         // Admin requests for Admins
         if (role === 'SUPER_ADMIN' || role === 'ADMIN') {
@@ -168,6 +185,11 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
                         {item.type === 'request' && (
                           <div className="p-1.5 rounded bg-blue-50 border border-blue-100 text-blue-600 mt-0.5">
                             <Calendar className="w-3.5 h-3.5" />
+                          </div>
+                        )}
+                        {item.type === 'email_sent_today' && (
+                          <div className="p-1.5 rounded bg-[#161616] text-white mt-0.5 shadow-sm animate-pulse">
+                            <Mail className="w-3.5 h-3.5 text-white" />
                           </div>
                         )}
                         <div>

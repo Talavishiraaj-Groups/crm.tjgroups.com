@@ -34,6 +34,7 @@ export const LeadDetail: React.FC = () => {
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [isZohoLinked, setIsZohoLinked] = useState(false);
   const [isFetchingZoho, setIsFetchingZoho] = useState(false);
+  const [showMandatoryFollowUpPrompt, setShowMandatoryFollowUpPrompt] = useState(false);
   const [logType, setLogType] = useState<'call' | 'message' | 'email'>('call');
 
   const fetchLeadEmailsForAdminOrUser = async (leadEmail: string, currentUser: User, targetLead: Lead | null, userList: User[]) => {
@@ -107,6 +108,15 @@ export const LeadDetail: React.FC = () => {
           fetchLeadEmailsForAdminOrUser(leadData.email, user, leadData, usersData).then(({ emails: fetched }) => {
             setZohoEmails(fetched);
             setIsZohoLinked(Boolean(fetched.length > 0 || usersData.some(u => Boolean(u.zohoRefreshToken)) || (logsData && logsData.some(l => l.action === 'EMAIL' || l.details?.includes('Zoho')))));
+
+            // Check if an email was sent today to show mandatory follow up prompt
+            const todayStr = new Date().toISOString().split('T')[0];
+            const emailSentToday = (fetched && fetched.some(e => e.direction === 'out' && e.timestamp?.startsWith(todayStr))) ||
+                                   (logsData && logsData.some(l => (l.action === 'EMAIL' || (l.details && l.details.includes('Sent email'))) && l.timestamp?.startsWith(todayStr)));
+
+            if (emailSentToday && (!leadData.nextFollowUp || leadData.nextFollowUp <= todayStr)) {
+              setShowMandatoryFollowUpPrompt(true);
+            }
 
             // Requirement 4: Auto-shift lead status to Contacted if email activity exists & status is New
             if (leadData.status === 'New' && fetched.length > 0 && id && user) {
@@ -214,6 +224,7 @@ export const LeadDetail: React.FC = () => {
         });
 
         setEmailSubject('');
+        setShowMandatoryFollowUpPrompt(true);
       } else {
         await api.logs.create({
           entityId: id,
@@ -363,6 +374,80 @@ export const LeadDetail: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Mandatory Action Banner: Email Sent Today -> Set Follow-Up Date Required */}
+      {showMandatoryFollowUpPrompt && (
+        <div className="bg-amber-50 border-2 border-amber-400 rounded-[8px] p-5 shadow-md animate-in slide-in-from-top-3 duration-200">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-amber-500 text-white rounded-[6px] shrink-0 mt-0.5 shadow-sm">
+                <Calendar className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-amber-200 text-amber-900 text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-wider">
+                    MANDATORY ACTION REQUIRED
+                  </span>
+                  <span className="text-xs font-bold text-amber-800">Email Sent Today</span>
+                </div>
+                <h4 className="text-sm font-black text-[#161616] tracking-tight mt-1">
+                  Set Mandatory Next Follow-Up Date for {lead.name}
+                </h4>
+                <p className="text-xs text-[#161616]/70 mt-0.5">
+                  An email was sent to this lead today. Select a follow-up date (max 3 days into future) to maintain deal momentum.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSetFollowUpDays(1);
+                    setShowMandatoryFollowUpPrompt(false);
+                  }}
+                  className="px-3.5 py-2 bg-white border border-amber-300 hover:border-black text-[#161616] rounded-[6px] text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-2xs"
+                >
+                  +1 Day
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSetFollowUpDays(2);
+                    setShowMandatoryFollowUpPrompt(false);
+                  }}
+                  className="px-3.5 py-2 bg-white border border-amber-300 hover:border-black text-[#161616] rounded-[6px] text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-2xs"
+                >
+                  +2 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSetFollowUpDays(3);
+                    setShowMandatoryFollowUpPrompt(false);
+                  }}
+                  className="px-3.5 py-2 bg-white border border-amber-300 hover:border-black text-[#161616] rounded-[6px] text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-2xs"
+                >
+                  +3 Days
+                </button>
+              </div>
+
+              <input
+                type="date"
+                min={todayStr}
+                max={maxFollowUpDateStr}
+                value={lead.nextFollowUp ? lead.nextFollowUp.split('T')[0] : ''}
+                onChange={e => {
+                  handleCustomFollowUpDate(e.target.value);
+                  setShowMandatoryFollowUpPrompt(false);
+                }}
+                className="text-xs border border-amber-300 rounded-[6px] px-3 py-2 bg-white font-bold text-[#161616] focus:outline-none cursor-pointer"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Col */}
