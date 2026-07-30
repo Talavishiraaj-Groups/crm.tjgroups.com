@@ -1,6 +1,6 @@
 import { 
   Lead, Deal, Project, AdminRequest, Log, User, Commission, 
-  UserRole, LeadStatus, DealStatus, ProjectStatus 
+  UserRole, LeadStatus, DealStatus, ProjectStatus, ZohoEmailItem 
 } from '../types';
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -422,7 +422,7 @@ export const api = {
   },
 
   zoho: {
-    getEmails: async (leadEmail: string, userId: string): Promise<any[]> => {
+    getEmails: async (leadEmail: string, userId: string): Promise<ZohoEmailItem[]> => {
       try {
         const data = await fetchAPI('getZohoEmails', 'GET', null, { leadEmail, userId });
         if (!Array.isArray(data)) return [];

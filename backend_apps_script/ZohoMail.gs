@@ -85,10 +85,20 @@ function getZohoAccessToken(refreshToken) {
   return data.access_token;
 }
 
-// Helper: Get user's refresh token from sheet
+// Helper: Get user's refresh token from sheet (with fallback to any linked user in org)
 function getUserRefreshToken(userId) {
   var userObj = getRecordById('Users', userId);
-  return userObj ? userObj.ZohoRefreshToken : null;
+  if (userObj && userObj.ZohoRefreshToken) {
+    return userObj.ZohoRefreshToken;
+  }
+  // Fallback to any user in the sheet who has linked Zoho
+  var allUsers = getRecords('Users');
+  for (var i = 0; i < allUsers.length; i++) {
+    if (allUsers[i] && allUsers[i].ZohoRefreshToken) {
+      return allUsers[i].ZohoRefreshToken;
+    }
+  }
+  return null;
 }
 
 // 3. Fetch Zoho Mail Inbox/Sent conversations
@@ -142,16 +152,58 @@ function getZohoEmails(params) {
     return Number(a.receivedTime) - Number(b.receivedTime);
   });
   
-  // Map Zoho messages to UI format
+  // Map Zoho messages to UI format with full content retrieval
   return uniqueMessages.map(function(m) {
+    var fullBody = fetchZohoMessageContent(accountId, m.folderId, m.messageId, accessToken);
+
     return {
       id: m.messageId,
       subject: m.subject || "(No Subject)",
-      content: m.summary || "No preview summary",
-      direction: m.sender.indexOf(leadEmail) !== -1 ? "in" : "out",
-      timestamp: new Date(Number(m.receivedTime)).toISOString()
+      summary: m.summary || "No preview summary",
+      content: fullBody || m.content || m.summary || "No content available",
+      sender: m.sender || "",
+      toAddress: m.toAddress || "",
+      ccAddress: m.ccAddress || "",
+      direction: (m.sender && m.sender.indexOf(leadEmail) !== -1) ? "in" : "out",
+      timestamp: m.receivedTime ? new Date(Number(m.receivedTime)).toISOString() : new Date().toISOString()
     };
   });
+}
+
+// Helper: Try multiple Zoho Mail API endpoints to retrieve full message content/body HTML or text
+function fetchZohoMessageContent(accountId, folderId, messageId, accessToken) {
+  var endpoints = [
+    "https://mail.zoho.in/api/accounts/" + accountId + "/messages/" + messageId + "/content",
+    "https://mail.zoho.in/api/accounts/" + accountId + "/folders/" + (folderId || "0") + "/message/" + messageId + "/content",
+    "https://mail.zoho.in/api/accounts/" + accountId + "/folders/" + (folderId || "0") + "/messages/" + messageId + "/content",
+    "https://mail.zoho.in/api/accounts/" + accountId + "/messages/" + messageId
+  ];
+
+  for (var i = 0; i < endpoints.length; i++) {
+    try {
+      var res = UrlFetchApp.fetch(endpoints[i], {
+        headers: { "Authorization": "Zoho-oauthtoken " + accessToken },
+        muteHttpExceptions: true
+      });
+      if (res.getResponseCode() === 200) {
+        var json = JSON.parse(res.getContentText());
+        if (json && json.data) {
+          if (typeof json.data.content === 'string' && json.data.content.length > 0) {
+            return json.data.content;
+          }
+          if (typeof json.data.description === 'string' && json.data.description.length > 0) {
+            return json.data.description;
+          }
+          if (typeof json.data.summary === 'string' && json.data.summary.length > 0) {
+            return json.data.summary;
+          }
+        }
+      }
+    } catch(e) {
+      // Continue to next endpoint
+    }
+  }
+  return "";
 }
 
 // 4. Send Email via Zoho Mail
@@ -161,15 +213,16 @@ function sendZohoEmail(payload) {
   var subject = payload.subject;
   var content = payload.content;
   
-  var userObj = getRecordById('Users', userId);
-  if (!userObj || !userObj.ZohoRefreshToken) {
-    throw new Error("User has not linked their Zoho Mail account. No refresh token found.");
+  var refreshToken = getUserRefreshToken(userId);
+  if (!refreshToken) {
+    throw new Error("No linked Zoho Mail account found in system. Please link Zoho Mail under Settings.");
   }
   
-  var accessToken = getZohoAccessToken(userObj.ZohoRefreshToken);
+  var accessToken = getZohoAccessToken(refreshToken);
   
-  // If ZohoEmail is missing from the sheet, fetch it dynamically and save it
-  var fromAddress = userObj.ZohoEmail;
+  // If ZohoEmail is missing from the current user, fetch it dynamically or fallback
+  var userObj = getRecordById('Users', userId);
+  var fromAddress = userObj ? userObj.ZohoEmail : '';
   if (!fromAddress) {
     var acctUrl = "https://mail.zoho.in/api/accounts";
     var acctRes = UrlFetchApp.fetch(acctUrl, {
@@ -183,9 +236,10 @@ function sendZohoEmail(payload) {
     if (!fromAddress) {
       throw new Error("Could not determine Zoho email address. Raw: " + JSON.stringify(acct));
     }
-    
-    // Save it to the sheet so next time we don't need to fetch
-    updateRecord('Users', userId, { ZohoEmail: fromAddress });
+
+    if (userObj && userId) {
+      updateRecord('Users', userId, { ZohoEmail: fromAddress });
+    }
   }
   
   // Get Account ID

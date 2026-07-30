@@ -9,6 +9,7 @@ import {
   ExternalLink, ShieldAlert
 } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
+import { ZohoEmailViewer } from '../components/zoho/ZohoEmailViewer';
 
 export const LeadDetail: React.FC = () => {
   const { id } = useParams();
@@ -32,7 +33,54 @@ export const LeadDetail: React.FC = () => {
   const [emailSubject, setEmailSubject] = useState('');
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [isZohoLinked, setIsZohoLinked] = useState(false);
+  const [isFetchingZoho, setIsFetchingZoho] = useState(false);
   const [logType, setLogType] = useState<'call' | 'message' | 'email'>('call');
+
+  const fetchLeadEmailsForAdminOrUser = async (leadEmail: string, currentUser: User, targetLead: Lead | null, userList: User[]) => {
+    const candidateIds: string[] = [];
+
+    // 1. Current user
+    if (currentUser?.id) candidateIds.push(currentUser.id);
+    if (currentUser?.username && !candidateIds.includes(currentUser.username)) candidateIds.push(currentUser.username);
+
+    // 2. Assigned reps on the lead
+    if (targetLead?.setterId && !candidateIds.includes(targetLead.setterId)) candidateIds.push(targetLead.setterId);
+    if (targetLead?.closerId && !candidateIds.includes(targetLead.closerId)) candidateIds.push(targetLead.closerId);
+    if (targetLead?.ownerRepId && !candidateIds.includes(targetLead.ownerRepId)) candidateIds.push(targetLead.ownerRepId);
+
+    // 3. All other team members
+    userList.forEach(u => {
+      if (u.id && !candidateIds.includes(u.id)) candidateIds.push(u.id);
+      if (u.username && !candidateIds.includes(u.username)) candidateIds.push(u.username);
+    });
+
+    // Try each candidate ID until emails are found
+    for (const candidateId of candidateIds) {
+      try {
+        const fetched = await api.zoho.getEmails(leadEmail, candidateId);
+        if (Array.isArray(fetched) && fetched.length > 0) {
+          return { emails: fetched, activeUserId: candidateId };
+        }
+      } catch (err) {
+        // Try next candidate
+      }
+    }
+
+    return { emails: [], activeUserId: currentUser?.id || '' };
+  };
+
+  const refreshZohoEmails = async () => {
+    if (!lead?.email || !user) return;
+    try {
+      setIsFetchingZoho(true);
+      const { emails: fetched } = await fetchLeadEmailsForAdminOrUser(lead.email, user, lead, users);
+      setZohoEmails(fetched);
+    } catch (err) {
+      console.error('Failed to refresh Zoho emails:', err);
+    } finally {
+      setIsFetchingZoho(false);
+    }
+  };
 
   const fetchData = async () => {
     if (id) {
@@ -53,14 +101,13 @@ export const LeadDetail: React.FC = () => {
         // Filter requests related to this lead (by relatedDealId)
         setRequests((requestsData || []).filter(r => r.relatedDealId === id));
 
-        // Check if logged-in user is Zoho connected, then load emails
-        const currentUserObj = usersData.find(u => u.id === user?.id);
-        if (currentUserObj?.zohoRefreshToken && leadData?.email && user) {
-          setIsZohoLinked(true);
-          api.zoho.getEmails(leadData.email, user.id).then(emailsData => {
-            const fetched = emailsData || [];
+        if (leadData?.email && user) {
+          setIsFetchingZoho(true);
+
+          fetchLeadEmailsForAdminOrUser(leadData.email, user, leadData, usersData).then(({ emails: fetched }) => {
             setZohoEmails(fetched);
-            
+            setIsZohoLinked(Boolean(fetched.length > 0 || usersData.some(u => Boolean(u.zohoRefreshToken)) || (logsData && logsData.some(l => l.action === 'EMAIL' || l.details?.includes('Zoho')))));
+
             // Requirement 4: Auto-shift lead status to Contacted if email activity exists & status is New
             if (leadData.status === 'New' && fetched.length > 0 && id && user) {
               api.leads.update(id, { status: 'Contacted' }).catch(() => {});
@@ -73,6 +120,8 @@ export const LeadDetail: React.FC = () => {
               }).catch(() => {});
               setLead(prev => prev ? { ...prev, status: 'Contacted' } : null);
             }
+          }).finally(() => {
+            setIsFetchingZoho(false);
           });
         } else {
           setIsZohoLinked(false);
@@ -151,8 +200,9 @@ export const LeadDetail: React.FC = () => {
           setIsSendingEmail(false);
           return;
         }
+        const sendAsUserId = lead?.setterId || lead?.closerId || lead?.ownerRepId || user.id;
         // Send Zoho API mail
-        await api.zoho.sendEmail(user.id, lead?.email || '', emailSubject, newLog);
+        await api.zoho.sendEmail(sendAsUserId, lead?.email || '', emailSubject, newLog);
         
         // Log it as standard CRM activity
         await api.logs.create({
@@ -623,36 +673,14 @@ export const LeadDetail: React.FC = () => {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex flex-col gap-8 relative ml-2">
-                    <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[#DFDFDF]"></div>
-                    {zohoEmails.length === 0 ? (
-                      <div className="text-[11px] text-[#161616]/30 italic ml-6">No emails exchanged with this lead yet. (Synced from Zoho Mail app)</div>
-                    ) : (
-                      zohoEmails.slice().reverse().map((item) => (
-                        <div key={item.id} className="flex gap-6 relative group">
-                          <div className={`w-3.5 h-3.5 rounded-full shrink-0 mt-1 z-10 border-2 border-blue-500 bg-blue-500 shadow-sm transition-all group-hover:scale-125`}></div>
-                          <div className="flex-1">
-                            <div className="flex justify-between items-baseline mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-black uppercase tracking-wider text-blue-600">
-                                  {item.direction === 'in' ? 'EMAIL RECEIVED' : 'EMAIL SENT'}
-                                </span>
-                                <span className="text-[8px] font-black bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded-[3px] uppercase tracking-wider">Zoho Mail</span>
-                                <span className="text-[10px] font-bold text-[#161616]/40 uppercase">
-                                  by {item.direction === 'in' ? 'Client' : 'You'}
-                                </span>
-                              </div>
-                              <span className="text-[10px] font-mono text-[#161616]/30">{new Date(item.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
-                            </div>
-                            <div className="bg-[#F9F9F9] border border-[#DFDFDF] border-l-4 border-l-blue-500 bg-blue-50/10 rounded-[8px] p-4 text-sm text-[#161616]/70 leading-relaxed whitespace-pre-wrap">
-                              <p className="font-bold text-[#161616] mb-2">{item.subject}</p>
-                              <div className="text-xs text-[#161616]/80">{item.content}</div>
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
+                  <ZohoEmailViewer
+                    emails={zohoEmails}
+                    leadEmail={lead.email}
+                    leadName={lead.name}
+                    crmLogs={logs}
+                    onRefresh={refreshZohoEmails}
+                    isRefreshing={isFetchingZoho}
+                  />
                 )}
               </div>
             )}

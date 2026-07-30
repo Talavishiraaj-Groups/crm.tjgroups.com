@@ -107,3 +107,16 @@ export interface Commission {
   payoutStatus: 'Pending' | 'Processing' | 'Paid';
   payoutDate?: string;
 }
+
+export interface ZohoEmailItem {
+  id: string;
+  subject: string;
+  summary?: string;
+  content: string;
+  sender?: string;
+  toAddress?: string;
+  ccAddress?: string;
+  direction: 'in' | 'out';
+  timestamp: string;
+}
+
