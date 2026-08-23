@@ -20,7 +20,7 @@ We use Google Apps Script's `PropertiesService` to securely store environment va
 2. Scroll to the bottom to the **Script Properties** section.
 3. Click **Add script property**.
 4. Set the **Property** to: `MAIN_FOLDER_ID`
-5. Set the **Value** to your target Google Drive Folder ID (e.g., `1RSlT9bTnVMN1x5ngOQv3cV1z9NQJYDke`).
+5. Set the **Value** to your target Google Drive Folder ID (the long string in the folder's URL). Do not commit the real ID to the repository.
 6. Click **Save script properties**.
 
 ## 3. Initialize the Database Structure
@@ -36,6 +36,15 @@ We use Google Apps Script's `PropertiesService` to securely store environment va
 
 ## 4. Deploy the REST API (Web App)
 For the React frontend to communicate with this backend, you must deploy the script as a Web App.
+
+> **This page is FIRST-TIME setup only.** "New deployment" is right here because
+> there is nothing to update yet, and it is how you obtain the `/exec` URL in
+> the first place.
+>
+> To **update** a backend that is already live, do NOT come here — use
+> `docs/DEPLOYMENT.md` §4 Step 2, which edits the existing deployment and keeps
+> the same URL. Creating a second deployment gives you a second URL, and the
+> live site would carry on calling the first one.
 
 1. Click the blue **Deploy** button in the top right corner.
 2. Select **New deployment**.

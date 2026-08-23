@@ -1,15 +1,42 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/services';
-import { Lead, Log, AdminRequest, User } from '../types';
+import { Lead, Log, AdminRequest, User, ZohoEmailItem } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { 
-  ArrowLeft, Phone, Mail, MessageSquare, Calendar, 
-  DollarSign, FileText, User as UserIcon, Send, CheckCircle, Clock,
-  ExternalLink, ShieldAlert
+  ArrowLeft, Phone, Mail, Calendar,
+  DollarSign, FileText, User as UserIcon, CheckCircle, Clock,
+  ExternalLink, ShieldAlert, Pencil, Trash2
 } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
 import { ZohoEmailViewer } from '../components/zoho/ZohoEmailViewer';
+import { EmailComposer } from '../components/zoho/EmailComposer';
+import { EditLeadModal } from '../components/leads/EditLeadModal';
+import { DeleteLeadModal } from '../components/leads/DeleteLeadModal';
+import { FollowUpPanel } from '../components/leads/FollowUpPanel';
+import { InteractionComposer } from '../components/leads/InteractionComposer';
+import { ResearchPanel } from '../components/leads/ResearchPanel';
+
+/**
+ * Combine the CRM's archived copies with whatever the mailbox returns now.
+ *
+ * The live copy wins when both exist: it carries the full body, while the
+ * archive holds only the envelope and a summary. Archived entries with no live
+ * counterpart are still shown — that is the whole point of keeping them, since
+ * a message may have been deleted from Zoho or the token that could read it
+ * may have expired.
+ *
+ * Outside the component because it depends on nothing in it.
+ */
+function mergeEmails(stored: ZohoEmailItem[], live: ZohoEmailItem[]): ZohoEmailItem[] {
+  const liveIds = new Set(live.map(e => e.id));
+  const kept = stored.filter(s => !liveIds.has(s.messageId || s.id));
+  return [...live, ...kept];
+}
+
+/** Truthy text is not an address: many leads carry "n.a." or similar. */
+const looksLikeEmail = (v?: string) =>
+  !!v && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim());
 
 export const LeadDetail: React.FC = () => {
   const { id } = useParams();
@@ -20,7 +47,6 @@ export const LeadDetail: React.FC = () => {
   const [requests, setRequests] = useState<AdminRequest[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [newLog, setNewLog] = useState('');
   // Conversion state
   const [isConverting, setIsConverting] = useState(false);
   const [dealValue, setDealValue] = useState(0);
@@ -29,72 +55,126 @@ export const LeadDetail: React.FC = () => {
   const [activeRightTab, setActiveRightTab] = useState<'activity' | 'zoho'>('activity');
 
   // Zoho Mail States
-  const [zohoEmails, setZohoEmails] = useState<any[]>([]);
-  const [emailSubject, setEmailSubject] = useState('');
-  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [zohoEmails, setZohoEmails] = useState<ZohoEmailItem[]>([]);
   const [isZohoLinked, setIsZohoLinked] = useState(false);
   const [isFetchingZoho, setIsFetchingZoho] = useState(false);
   const [showMandatoryFollowUpPrompt, setShowMandatoryFollowUpPrompt] = useState(false);
-  const [logType, setLogType] = useState<'call' | 'message' | 'email'>('call');
+  const [showEdit, setShowEdit] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const isManager = role === 'SUPER_ADMIN' || role === 'ADMIN';
 
-  const fetchLeadEmailsForAdminOrUser = async (leadEmail: string, currentUser: User, targetLead: Lead | null, userList: User[]) => {
-    const candidateIds: string[] = [];
+  /**
+   * One request per mailbox, not one per user.
+   *
+   * This used to walk every user id in the org until a fetch returned
+   * something, which made a dozen identical calls on every lead view: the
+   * backend has only ever read the caller's own mailbox, and now enforces it.
+   *
+   * @param preloaded archived mail already fetched alongside the rest of the
+   *        page. Passing it avoids a second request for something we have.
+   */
+  const loadEmails = useCallback(async (targetLead: Lead, preloaded?: ZohoEmailItem[]) => {
+    if (!targetLead.email) return [] as ZohoEmailItem[];
 
-    // 1. Current user
-    if (currentUser?.id) candidateIds.push(currentUser.id);
-    if (currentUser?.username && !candidateIds.includes(currentUser.username)) candidateIds.push(currentUser.username);
-
-    // 2. Assigned reps on the lead
-    if (targetLead?.setterId && !candidateIds.includes(targetLead.setterId)) candidateIds.push(targetLead.setterId);
-    if (targetLead?.closerId && !candidateIds.includes(targetLead.closerId)) candidateIds.push(targetLead.closerId);
-    if (targetLead?.ownerRepId && !candidateIds.includes(targetLead.ownerRepId)) candidateIds.push(targetLead.ownerRepId);
-
-    // 3. All other team members
-    userList.forEach(u => {
-      if (u.id && !candidateIds.includes(u.id)) candidateIds.push(u.id);
-      if (u.username && !candidateIds.includes(u.username)) candidateIds.push(u.username);
-    });
-
-    // Try each candidate ID until emails are found
-    for (const candidateId of candidateIds) {
+    let stored: ZohoEmailItem[] = preloaded ?? [];
+    if (!preloaded) {
       try {
-        const fetched = await api.zoho.getEmails(leadEmail, candidateId);
-        if (Array.isArray(fetched) && fetched.length > 0) {
-          return { emails: fetched, activeUserId: candidateId };
-        }
+        stored = await api.zoho.getStoredEmails(targetLead.id, targetLead.email);
+        // Show the archive straight away; the Zoho round-trip is much slower.
+        setZohoEmails(stored);
       } catch (err) {
-        // Try next candidate
+        console.error('Could not read stored emails:', err);
       }
     }
 
-    return { emails: [], activeUserId: currentUser?.id || '' };
-  };
+    try {
+      const live = await api.zoho.getEmails(targetLead.email, targetLead.id);
+      const merged = mergeEmails(stored, live);
+      setZohoEmails(merged);
+      return merged;
+    } catch (err) {
+      // A mailbox that cannot be reached is not an error the user can act on
+      // — they still have the archived conversation in front of them.
+      console.error('Could not sync from Zoho:', err);
+      return stored;
+    }
+  }, []);
 
-  const refreshZohoEmails = async () => {
-    if (!lead?.email || !user) return;
+  /**
+   * Pull the conversation again from the mailbox.
+   *
+   * `preloaded` is deliberately NOT passed: a manual refresh must skip the
+   * archived copy and go to Zoho, or pressing it after replying just re-reads
+   * the same stale rows and appears to do nothing.
+   */
+  const refreshZohoEmails = useCallback(async () => {
+    if (!lead?.email) return;
     try {
       setIsFetchingZoho(true);
-      const { emails: fetched } = await fetchLeadEmailsForAdminOrUser(lead.email, user, lead, users);
-      setZohoEmails(fetched);
-    } catch (err) {
-      console.error('Failed to refresh Zoho emails:', err);
+      await loadEmails(lead);
     } finally {
       setIsFetchingZoho(false);
     }
-  };
+  }, [lead, loadEmails]);
 
-  const fetchData = async () => {
+  /**
+   * Poll the open conversation while the tab is in view.
+   *
+   * A reply lands in the mailbox seconds after it is sent, and waiting for
+   * someone to press a button to discover that is the wrong default. Bounded
+   * deliberately: only while the Zoho tab is actually open, only while the
+   * browser tab is visible, and no faster than once a minute — each poll is a
+   * Zoho round trip plus an Apps Script invocation on a shared free-tier
+   * budget.
+   */
+  useEffect(() => {
+    if (activeRightTab !== 'zoho') return;
+    if (!lead?.email || !looksLikeEmail(lead.email)) return;
+
+    const POLL_MS = 60 * 1000;
+    const tick = () => {
+      if (document.visibilityState === 'visible') refreshZohoEmails();
+    };
+
+    const interval = setInterval(tick, POLL_MS);
+    // Returning to the tab is when a stale thread is noticed, so check then
+    // rather than waiting out the rest of the interval.
+    document.addEventListener('visibilitychange', tick);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [activeRightTab, lead, refreshZohoEmails]);
+
+  const fetchData = useCallback(async () => {
     if (id) {
       try {
         setIsLoading(true);
-        // Fetch lead, logs, and requests in parallel
-        const [leadData, logsData, requestsData, usersData] = await Promise.all([
-          api.leads.getById(id),
-          api.logs.getByEntity(id),
-          api.adminRequests.getAll(),
-          api.users.getAll()
+
+        // One round trip, not four. Every Apps Script invocation costs a
+        // second or more on the free tier no matter how little it does, so
+        // the request count — not the work — is what this page waited on.
+        const got = await api.batch([
+          { key: 'lead', action: 'getLeadById', payload: { id } },
+          { key: 'logs', action: 'getLogs', payload: { id } },
+          { key: 'requests', action: 'getAdminRequests' },
+          { key: 'users', action: 'getUsers' },
+          // The archived conversation comes along for free. Only the live
+          // Zoho sync, which reaches an external service, stays out of band.
+          { key: 'stored', action: 'getStoredEmails', payload: { leadId: id } },
         ]);
+
+        const leadData = got.failed('lead')
+          ? undefined
+          : api.map.lead(got.get<Record<string, unknown>>('lead', {}));
+        const logsData = got.get<Record<string, unknown>[]>('logs', []).map(api.map.log);
+        const requestsData = got.get<Record<string, unknown>[]>('requests', []).map(api.map.adminRequest);
+        const usersData = got.get<Record<string, unknown>[]>('users', []).map(api.map.user);
+        const storedEmails = got.get<Record<string, unknown>[]>('stored', []).map(api.map.storedEmail);
+
         setUsers(usersData);
+        setZohoEmails(storedEmails);
 
         if (leadData) setLead(leadData);
         setLogs(logsData || []);
@@ -102,13 +182,26 @@ export const LeadDetail: React.FC = () => {
         // Filter requests related to this lead (by relatedDealId)
         setRequests((requestsData || []).filter(r => r.relatedDealId === id));
 
-        if (leadData?.email && user) {
+        // Whether YOUR mailbox is connected is a fact about you, not about
+        // this lead. These were previously the same flag, so opening a lead
+        // with no email address reported "Zoho Mail Not Linked" — sending
+        // people off to reconnect an account that was already fine.
+        //
+        // "Linked" means THIS user has connected their own mailbox. It used to
+        // mean "anyone in the org has", which is what let one person read and
+        // send from a colleague's Zoho account.
+        const me = user ? usersData.find(u => u.id === user.id) : undefined;
+        setIsZohoLinked(Boolean(me?.zohoLinked || me?.zohoEmail));
+
+        // Only attempt a mailbox lookup when the lead actually has a usable
+        // address. Plenty of real leads carry placeholder text such as
+        // "n.a. — no address published", which is truthy but not an address:
+        // sending it would fail validation server-side and surface as a
+        // "data may be incomplete" warning for a lead that simply has no email.
+        if (leadData && looksLikeEmail(leadData.email) && user) {
           setIsFetchingZoho(true);
 
-          fetchLeadEmailsForAdminOrUser(leadData.email, user, leadData, usersData).then(({ emails: fetched }) => {
-            setZohoEmails(fetched);
-            setIsZohoLinked(Boolean(fetched.length > 0 || usersData.some(u => Boolean(u.zohoRefreshToken)) || (logsData && logsData.some(l => l.action === 'EMAIL' || l.details?.includes('Zoho')))));
-
+          loadEmails(leadData, storedEmails).then((fetched) => {
             // Check if an email was sent today to show mandatory follow up prompt
             const todayStr = new Date().toISOString().split('T')[0];
             const emailSentToday = (fetched && fetched.some(e => e.direction === 'out' && e.timestamp?.startsWith(todayStr))) ||
@@ -118,23 +211,29 @@ export const LeadDetail: React.FC = () => {
               setShowMandatoryFollowUpPrompt(true);
             }
 
-            // Requirement 4: Auto-shift lead status to Contacted if email activity exists & status is New
-            if (leadData.status === 'New' && fetched.length > 0 && id && user) {
+            // Move a New lead to Contacted only when WE have actually emailed
+            // them since the lead was created.
+            //
+            // This used to fire on any message at all involving that address.
+            // Creating a lead for someone you had corresponded with before —
+            // which is most of them — flipped it to Contacted the instant the
+            // page opened, so a brand-new lead was never New. Outreach that
+            // predates the record is not outreach about this lead.
+            const createdAt = Date.parse(leadData.createdAt || '');
+            const contactedSinceCreation = fetched.some(e =>
+              e.direction === 'out' &&
+              !Number.isNaN(Date.parse(e.timestamp)) &&
+              (Number.isNaN(createdAt) || Date.parse(e.timestamp) >= createdAt)
+            );
+
+            if (leadData.status === 'New' && contactedSinceCreation && id) {
+              // The backend audits the status change; no client log here.
               api.leads.update(id, { status: 'Contacted' }).catch(() => {});
-              api.logs.create({
-                entityId: id,
-                entityType: 'Lead',
-                action: 'STATUS_CHANGE',
-                userId: user.id,
-                details: 'Lead status automatically shifted to Contacted due to Zoho Email communication.'
-              }).catch(() => {});
               setLead(prev => prev ? { ...prev, status: 'Contacted' } : null);
             }
           }).finally(() => {
             setIsFetchingZoho(false);
           });
-        } else {
-          setIsZohoLinked(false);
         }
       } catch (err) {
         console.error('Failed to fetch data:', err);
@@ -142,7 +241,7 @@ export const LeadDetail: React.FC = () => {
         setIsLoading(false);
       }
     }
-  };
+  }, [id, user, loadEmails]);
 
   const todayStr = new Date().toISOString().split('T')[0];
   const maxFollowUpDateStr = (() => {
@@ -158,14 +257,8 @@ export const LeadDetail: React.FC = () => {
     const dateStr = target.toISOString().split('T')[0];
     
     try {
+      // The backend audits this update; a second log here would double it.
       await api.leads.update(id, { nextFollowUp: dateStr });
-      await api.logs.create({
-        entityId: id,
-        entityType: 'Lead',
-        action: 'STATUS_CHANGE',
-        userId: user.id,
-        details: `Updated Next Follow-Up date to ${dateStr}`
-      });
       setLead(prev => prev ? { ...prev, nextFollowUp: dateStr } : null);
     } catch (err) {
       console.error('Failed to update follow up date:', err);
@@ -182,14 +275,8 @@ export const LeadDetail: React.FC = () => {
     }
     
     try {
+      // The backend audits this update; a second log here would double it.
       await api.leads.update(id, { nextFollowUp: finalDateStr });
-      await api.logs.create({
-        entityId: id,
-        entityType: 'Lead',
-        action: 'STATUS_CHANGE',
-        userId: user.id,
-        details: `Updated Next Follow-Up date to ${finalDateStr}`
-      });
       setLead(prev => prev ? { ...prev, nextFollowUp: finalDateStr } : null);
     } catch (err) {
       console.error('Failed to update follow up date:', err);
@@ -197,68 +284,47 @@ export const LeadDetail: React.FC = () => {
   };
 
   useEffect(() => {
+    // Loading remote data on mount. State lands after the request resolves,
+    // never synchronously inside the effect body.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
-  }, [id]);
+  }, [fetchData]);
 
-  const handleLogActivity = async (forceLogType?: 'zoho') => {
-    if (!newLog.trim() || !id || !user) return;
-    setIsSendingEmail(true);
-    try {
-      if (forceLogType === 'zoho') {
-        if (!emailSubject.trim()) {
-          alert('Please enter an email subject.');
-          setIsSendingEmail(false);
-          return;
-        }
-        const sendAsUserId = lead?.setterId || lead?.closerId || lead?.ownerRepId || user.id;
-        // Send Zoho API mail
-        await api.zoho.sendEmail(sendAsUserId, lead?.email || '', emailSubject, newLog);
-        
-        // Log it as standard CRM activity
-        await api.logs.create({
-          entityId: id,
-          entityType: 'Lead',
-          action: 'EMAIL',
-          userId: user.id,
-          details: `Sent email via Zoho: [Subject: ${emailSubject}] ${newLog}`
-        });
+  /**
+   * Apply a change locally at once, then reconcile in the background.
+   *
+   * Every Apps Script call costs a second or more before it does any work, so
+   * `await write; await refetch` made each click a 3–6 second wait on a
+   * screen that had not visibly changed. The write still has to happen — but
+   * the person clicking already knows what they chose, so showing it
+   * immediately and correcting later if the server disagrees is both faster
+   * and more honest than a frozen button.
+   */
+  const applyLeadChange = (
+    patch: Partial<Lead>,
+    write: () => Promise<unknown>,
+  ) => {
+    const previous = lead;
+    setLead((current) => (current ? { ...current, ...patch } : current));
 
-        setEmailSubject('');
-        setShowMandatoryFollowUpPrompt(true);
-      } else {
-        await api.logs.create({
-          entityId: id,
-          entityType: 'Lead',
-          action: logType.toUpperCase(),
-          userId: user.id,
-          details: newLog
-        });
-      }
-      setNewLog('');
-      fetchData();
-    } catch (err: any) {
-      console.error(err);
-      alert('Failed to submit: ' + (err.message || 'Check your connection'));
-    } finally {
-      setIsSendingEmail(false);
-    }
+    write()
+      .then(() => {
+        // Refresh quietly: the audit log and follow-up state may have moved
+        // too, and that is not something the client can infer.
+        fetchData();
+      })
+      .catch((err) => {
+        console.error('Update failed, restoring previous value:', err);
+        setLead(previous);
+        alert('That change could not be saved. The previous value has been restored.');
+      });
   };
 
-  const handleUpdateStatus = async (status: Lead['status']) => {
+  const handleUpdateStatus = (status: Lead['status']) => {
     if (!id || !user) return;
-    try {
-      await api.leads.update(id, { status });
-      await api.logs.create({
-        entityId: id,
-        entityType: 'Lead',
-        action: 'STATUS_CHANGE',
-        userId: user.id,
-        details: `Status updated to ${status}`
-      });
-      fetchData();
-    } catch (err) {
-      console.error(err);
-    }
+    // The backend writes the STATUS_CHANGE entry itself, with the old and
+    // new value. Logging again here is what produced two rows per change.
+    applyLeadChange({ status }, () => api.leads.update(id, { status }));
   };
 
   const handleConvertToDeal = async () => {
@@ -273,9 +339,10 @@ export const LeadDetail: React.FC = () => {
       await api.leads.convertToDeal(id, user.id, dealValue);
       alert('Lead successfully converted to Deal!');
       navigate('/deals');
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      alert('Failed to convert lead: ' + (err.message || 'Ensure the backend is responding.'));
+      alert('Failed to convert lead: ' +
+        (err instanceof Error ? err.message : 'Ensure the backend is responding.'));
     } finally {
       setIsConverting(false);
     }
@@ -338,9 +405,28 @@ export const LeadDetail: React.FC = () => {
           <ArrowLeft className="w-4 h-4" /> Back to Leads
         </button>
         <div className="flex gap-2">
-          <button 
+          {/* Editing a lead's identity and deleting it are both manager
+              actions. The server enforces this independently — hiding the
+              buttons is convenience, not the control. */}
+          {isManager && (
+            <>
+              <button
+                onClick={() => setShowEdit(true)}
+                className="flex items-center gap-2 border border-[#DFDFDF] text-[#161616]/60 px-4 py-2 rounded-[6px] text-xs font-bold hover:border-[#161616]/40 transition-all"
+              >
+                <Pencil className="w-3.5 h-3.5" /> EDIT LEAD
+              </button>
+              <button
+                onClick={() => setShowDelete(true)}
+                className="flex items-center gap-2 border border-red-200 text-red-600 px-4 py-2 rounded-[6px] text-xs font-bold hover:bg-red-50 transition-all"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> DELETE
+              </button>
+            </>
+          )}
+          <button
             disabled={lead.status === 'Converted'}
-            onClick={() => handleRequest('payment')} 
+            onClick={() => handleRequest('payment')}
             className="flex items-center gap-2 border border-[#DFDFDF] text-[#161616]/60 px-4 py-2 rounded-[6px] text-xs font-bold hover:border-[#161616]/40 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           >
             <DollarSign className="w-3.5 h-3.5" /> REQUEST PAYMENT
@@ -516,75 +602,10 @@ export const LeadDetail: React.FC = () => {
             </div>
           </div>
 
-          {/* Next Follow-Up Schedule Card (Max 3 Days Rule) */}
-          <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-5 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-[10px] font-black text-[#161616] uppercase tracking-widest flex items-center gap-2">
-                <Calendar className="w-3.5 h-3.5 text-[#161616]/40" /> Next Follow-Up
-              </h3>
-              {lead.nextFollowUp ? (
-                (() => {
-                  const dateVal = lead.nextFollowUp.split('T')[0];
-                  return (
-                    <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
-                      dateVal < todayStr 
-                        ? 'bg-red-100 text-red-700 border border-red-200 animate-pulse' 
-                        : dateVal === todayStr 
-                        ? 'bg-amber-100 text-amber-700 border border-amber-200' 
-                        : 'bg-green-100 text-green-700 border border-green-200'
-                    }`}>
-                      {dateVal < todayStr ? 'OVERDUE' : dateVal === todayStr ? 'DUE TODAY' : 'SCHEDULED'}
-                    </span>
-                  );
-                })()
-              ) : (
+          {/* When the next contact is due. Recording that contact happened
+              lives in the interaction composer on the right. */}
+          <FollowUpPanel lead={lead} onDone={fetchData} maxDate={maxFollowUpDateStr} />
 
-                <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500">
-                  UNSET
-                </span>
-              )}
-            </div>
-
-            <div className="p-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] flex items-center justify-between">
-              <span className="text-xs font-bold text-[#161616]">
-                {lead.nextFollowUp ? lead.nextFollowUp.split('T')[0] : 'No follow-up date set'}
-              </span>
-              <input 
-                type="date"
-                min={todayStr}
-                max={maxFollowUpDateStr}
-                value={lead.nextFollowUp ? lead.nextFollowUp.split('T')[0] : ''}
-                onChange={e => handleCustomFollowUpDate(e.target.value)}
-                className="text-xs border border-[#DFDFDF] rounded px-2 py-1 bg-white font-medium focus:outline-none cursor-pointer"
-              />
-            </div>
-
-
-            {/* Quick Presets (+1d, +2d, +3d max) */}
-            <div>
-              <p className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest mb-2">Quick Presets (Max 3 Days)</p>
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  onClick={() => handleSetFollowUpDays(1)}
-                  className="py-1.5 px-2 bg-white border border-[#DFDFDF] hover:border-[#161616] text-[#161616] rounded text-[10px] font-black uppercase transition-all cursor-pointer text-center"
-                >
-                  +1 Day
-                </button>
-                <button
-                  onClick={() => handleSetFollowUpDays(2)}
-                  className="py-1.5 px-2 bg-white border border-[#DFDFDF] hover:border-[#161616] text-[#161616] rounded text-[10px] font-black uppercase transition-all cursor-pointer text-center"
-                >
-                  +2 Days
-                </button>
-                <button
-                  onClick={() => handleSetFollowUpDays(3)}
-                  className="py-1.5 px-2 bg-white border border-[#DFDFDF] hover:border-[#161616] text-[#161616] rounded text-[10px] font-black uppercase transition-all cursor-pointer text-center"
-                >
-                  +3 Days
-                </button>
-              </div>
-            </div>
-          </div>
 
 
           {/* Admin Requests Status */}
@@ -602,9 +623,9 @@ export const LeadDetail: React.FC = () => {
                         {r.status}
                       </span>
                     </div>
-                    {(r as any).paymentLink || (r as any).documentUrl ? (
+                    {r.paymentLink || r.documentUrl ? (
                       <a 
-                        href={(r as any).paymentLink || (r as any).documentUrl} 
+                        href={r.paymentLink || r.documentUrl} 
                         target="_blank" rel="noopener noreferrer"
                         className="flex items-center justify-center gap-2 w-full bg-[#161616] text-white py-2 rounded-[4px] text-[10px] font-bold hover:opacity-90 transition-all uppercase tracking-widest"
                       >
@@ -651,9 +672,10 @@ export const LeadDetail: React.FC = () => {
                   <label className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest block mb-1.5">Re-assign Setter</label>
                   <select 
                     value={lead.setterId || lead.ownerRepId || ''}
-                    onChange={async (e) => {
-                      await api.leads.update(lead.id, { setterId: e.target.value });
-                      fetchData();
+                    onChange={(e) => {
+                      const setterId = e.target.value;
+                      applyLeadChange({ setterId }, () =>
+                        api.leads.update(lead.id, { setterId }));
                     }}
                     className="w-full bg-[#F9F9F9] border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#161616]/30 transition-all"
                   >
@@ -667,9 +689,10 @@ export const LeadDetail: React.FC = () => {
                   <label className="text-[9px] font-bold text-[#161616]/30 uppercase tracking-widest block mb-1.5">Assign Closer</label>
                   <select 
                     value={lead.closerId || ''}
-                    onChange={async (e) => {
-                      await api.leads.update(lead.id, { closerId: e.target.value });
-                      fetchData();
+                    onChange={(e) => {
+                      const closerId = e.target.value;
+                      applyLeadChange({ closerId }, () =>
+                        api.leads.update(lead.id, { closerId }));
                     }}
                     className="w-full bg-[#F9F9F9] border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#161616]/30 transition-all"
                   >
@@ -716,12 +739,25 @@ export const LeadDetail: React.FC = () => {
             </div>
 
             {activeRightTab === 'activity' ? (
-              <div className="flex flex-col gap-8 relative ml-2">
+              // Scroll INSIDE the panel. A busy lead can carry hundreds of
+              // entries, and letting them extend the page meant scrolling
+              // past the whole timeline to reach anything below it.
+              <div className="flex flex-col gap-8 relative ml-2 max-h-[600px] overflow-y-auto pr-2">
                 <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[#DFDFDF]"></div>
                 {logs.length === 0 ? (
                   <div className="text-[11px] text-[#161616]/30 italic ml-6">No operational logs recorded.</div>
                 ) : (
-                  logs.slice().reverse().map((item) => (
+                  // Newest first. The backend already returns them that way,
+                  // and this used to `.reverse()` it — so the thing that just
+                  // happened sat at the bottom of a scrolling panel and you
+                  // had to scroll to find it. Sorted explicitly rather than
+                  // trusting the server's order, so the display cannot quietly
+                  // flip if that ever changes.
+                  logs
+                    .slice()
+                    .sort((a, b) =>
+                      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                    .map((item) => (
                     <div key={item.id} className="flex gap-6 relative group">
                       <div className={`w-3.5 h-3.5 rounded-full shrink-0 mt-1 z-10 border-2 transition-all group-hover:scale-125 ${
                         item.action.includes('SYSTEM') || item.action.includes('STATUS_CHANGE') 
@@ -748,13 +784,34 @@ export const LeadDetail: React.FC = () => {
               </div>
             ) : (
               // Zoho Emails Tab Content
+              //
+              // Three genuinely different situations, told apart. They used to
+              // share one message — "Zoho Mail Not Linked" — which sent people
+              // to reconnect a working account because the LEAD happened to
+              // have no email address.
               <div className="flex flex-col gap-6">
                 {!isZohoLinked ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center gap-4 bg-[#F9F9F9] border border-dashed border-[#DFDFDF] rounded-[8px] px-6">
                     <Mail className="w-10 h-10 text-[#161616]/20" />
                     <div>
-                      <h4 className="text-xs font-bold text-[#161616] uppercase tracking-widest mb-1.5">Zoho Mail Not Linked</h4>
-                      <p className="text-[11px] text-[#161616]/40 max-w-[280px] leading-relaxed mx-auto">Link your Zoho Business Mail account under settings on the Dashboard to sync email conversations.</p>
+                      <h4 className="text-xs font-bold text-[#161616] uppercase tracking-widest mb-1.5">Your Zoho Mail is not linked</h4>
+                      <p className="text-[11px] text-[#161616]/40 max-w-[300px] leading-relaxed mx-auto">
+                        Connect your own Zoho Business Mail account from the Dashboard
+                        to read and send email here. Each person links their own mailbox.
+                      </p>
+                    </div>
+                  </div>
+                ) : !looksLikeEmail(lead.email) ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-center gap-4 bg-[#F9F9F9] border border-dashed border-[#DFDFDF] rounded-[8px] px-6">
+                    <Mail className="w-10 h-10 text-[#161616]/20" />
+                    <div>
+                      <h4 className="text-xs font-bold text-[#161616] uppercase tracking-widest mb-1.5">This lead has no email address</h4>
+                      <p className="text-[11px] text-[#161616]/40 max-w-[300px] leading-relaxed mx-auto">
+                        Your mailbox is connected — there is simply no address on
+                        this record to hold a conversation with.
+                        {lead.email ? ` The contact field currently reads "${lead.email}".` : ''}
+                        {isManager ? ' Add one with Edit Lead.' : ''}
+                      </p>
                     </div>
                   </div>
                 ) : (
@@ -775,81 +832,60 @@ export const LeadDetail: React.FC = () => {
           {lead.status !== 'Converted' && (
             <>
               {activeRightTab === 'activity' ? (
-                // CRM Logs Composer
-                <div className="bg-[#161616] rounded-[6px] p-6 shadow-xl">
-                  <h3 className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-5">Log New Interaction</h3>
-                  <div className="flex gap-3 mb-5">
-                    {([
-                      { key: 'call', icon: Phone, label: 'Call' }, 
-                      { key: 'message', icon: MessageSquare, label: 'WhatsApp' }, 
-                      { key: 'email', icon: Mail, label: 'Email Note' }
-                    ] as const).map(({ key, icon: Icon, label }) => (
-                      <button 
-                        key={key} 
-                        type="button"
-                        onClick={() => setLogType(key)} 
-                        className={`flex items-center gap-2 px-4 py-2 rounded-[6px] text-[11px] font-black transition-all uppercase tracking-widest cursor-pointer ${logType === key ? 'bg-white text-[#161616]' : 'border border-white/10 text-white/40 hover:border-white/30 hover:text-white'}`}
-                      >
-                        <Icon className="w-3.5 h-3.5" />{label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <textarea 
-                    value={newLog} 
-                    onChange={(e) => setNewLog(e.target.value)} 
-                    placeholder={`Describe the details of your ${logType}...`} 
-                    className="w-full min-h-[120px] px-5 py-4 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 resize-none text-white placeholder:text-white/10 mb-4" 
+                // The one place contact is recorded. It both writes the log
+                // entry and advances the follow-up, which used to require two
+                // different forms on opposite sides of this page.
+                <>
+                  <InteractionComposer
+                    lead={lead}
+                    maxDate={maxFollowUpDateStr}
+                    onDone={fetchData}
                   />
-                  <div className="flex justify-end">
-                    <button 
-                      onClick={() => handleLogActivity()} 
-                      disabled={!newLog.trim()} 
-                      className="flex items-center gap-2 bg-white text-[#161616] px-6 py-3 rounded-[6px] text-[11px] font-black hover:opacity-90 transition-all disabled:opacity-20 uppercase tracking-widest cursor-pointer"
-                    >
-                      <Send className="w-4 h-4" /> COMMIT LOG
-                    </button>
-                  </div>
-                </div>
+                  {/* Read while you write the log entry: what was found out
+                      about this company and why it was worth approaching.
+                      It sat in the left column, far from the box where that
+                      context is actually used. */}
+                  <ResearchPanel lead={lead} users={users} onSaved={fetchData} />
+                </>
               ) : (
-                // Zoho Email Composer Tab
-                isZohoLinked && (
-                  <div className="bg-[#161616] rounded-[6px] p-6 shadow-xl">
-                    <h3 className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-5">Compose & Send Zoho Email</h3>
-                    <div className="mb-4">
-                      <input
-                        type="text"
-                        placeholder="Email Subject..."
-                        value={emailSubject}
-                        onChange={e => setEmailSubject(e.target.value)}
-                        className="w-full px-5 py-3 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 text-white placeholder:text-white/20 font-bold"
-                      />
-                    </div>
-                    <textarea 
-                      value={newLog} 
-                      onChange={(e) => setNewLog(e.target.value)} 
-                      placeholder="Write your email body..." 
-                      className="w-full min-h-[160px] px-5 py-4 bg-white/5 border border-white/10 rounded-[8px] text-sm focus:outline-none focus:border-white/30 resize-none text-white placeholder:text-white/10 mb-4" 
-                    />
-                    <div className="flex justify-end">
-                      <button 
-                        onClick={async () => {
-                          await handleLogActivity('zoho');
-                        }}
-                        disabled={!newLog.trim() || isSendingEmail} 
-                        className="flex items-center gap-2 bg-white text-[#161616] px-6 py-3 rounded-[6px] text-[11px] font-black hover:opacity-90 transition-all disabled:opacity-20 uppercase tracking-widest cursor-pointer"
-                      >
-                        <Send className="w-4 h-4" /> 
-                        {isSendingEmail ? 'SENDING...' : 'SEND ZOHO EMAIL'}
-                      </button>
-                    </div>
-                  </div>
+                // Composing needs both: a mailbox to send from, and somewhere
+                // to send it.
+                isZohoLinked && looksLikeEmail(lead.email) && (
+                  <EmailComposer
+                    leadId={lead.id}
+                    leadEmail={lead.email}
+                    leadName={lead.name}
+                    onSent={() => {
+                      // The backend already logged EMAIL_SENT and archived the
+                      // message; reload so both show up here.
+                      setShowMandatoryFollowUpPrompt(true);
+                      fetchData();
+                    }}
+                  />
                 )
               )}
             </>
           )}
         </div>
       </div>
+
+      {showEdit && (
+        <EditLeadModal
+          lead={lead}
+          onClose={() => setShowEdit(false)}
+          onSaved={fetchData}
+        />
+      )}
+
+      {showDelete && (
+        <DeleteLeadModal
+          lead={lead}
+          onClose={() => setShowDelete(false)}
+          // The lead is no longer visible in the CRM, so there is nothing left
+          // to show on this page — go back to the list.
+          onDeleted={() => navigate('/leads')}
+        />
+      )}
     </div>
   );
 };

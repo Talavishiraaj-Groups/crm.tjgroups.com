@@ -13,6 +13,8 @@ export const TeamPage: React.FC = () => {
   
   // Edit state
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  // Write-only: a password is sent to the server and never read back.
+  const [editPassword, setEditPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const fetchUsers = () => {
@@ -51,9 +53,10 @@ export const TeamPage: React.FC = () => {
         username: editingUser.username,
         role: editingUser.role,
         team: editingUser.team || undefined,
-        password: editingUser.password
+        password: editPassword || undefined
       });
       setEditingUser(null);
+      setEditPassword('');
       fetchUsers();
     } catch (err) {
       console.error("Failed to update user", err);

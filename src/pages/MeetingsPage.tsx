@@ -23,12 +23,17 @@ export const MeetingsPage: React.FC = () => {
     if (!user) return;
     setIsLoading(true);
     try {
-      const [leadsData, allLogs] = await Promise.all([
-        api.leads.getAll(role!, user.id),
-        api.logs.getByEntity('GLOBAL')
+      // One request, and only the two kinds of entry this page shows. It used
+      // to fetch the entire log history and discard almost all of it here.
+      const got = await api.batch([
+        { key: 'leads', action: 'getLeads' },
+        { key: 'logs', action: 'getLogs', payload: { logAction: 'MEETING,SCHEDULED_CALL' } },
       ]);
+      const leadsData = got.get<Record<string, unknown>[]>('leads', []).map(api.map.lead);
+      const meetingLogs = got.get<Record<string, unknown>[]>('logs', []).map(api.map.log);
+
       setLeads(leadsData.filter(l => l.status !== 'Converted' && l.status !== 'Closed'));
-      setMeetings(allLogs.filter(log => log.action === 'MEETING' || log.action === 'SCHEDULED_CALL'));
+      setMeetings(meetingLogs);
     } catch (err) {
       console.error("Failed to fetch meetings:", err);
     } finally {

@@ -4,7 +4,9 @@ import { api } from '../api/services';
 import { Lead, User } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Plus, Search, Upload, X, AlertCircle, CheckCircle2, User as UserIcon, Calendar, ChevronRight, DollarSign, FileText, Bell } from 'lucide-react';
-import * as XLSX from 'xlsx';
+// Types only — erased at build time, so this does not pull xlsx into the
+// bundle. The module itself is imported dynamically where it is used.
+import type * as XLSXTypes from 'xlsx';
 import { STATUS_BADGE } from '../utils/badges';
 
 export const LeadsPage: React.FC = () => {
@@ -58,10 +60,13 @@ export const LeadsPage: React.FC = () => {
   const fetchData = () => {
     if (user) {
       setIsLoading(true);
-      Promise.all([
-        api.leads.getAll(role!, user.id),
-        api.users.getAll()
-      ]).then(([leadsData, usersData]) => {
+      // One request, not two.
+      api.batch([
+        { key: 'leads', action: 'getLeads' },
+        { key: 'users', action: 'getUsers' },
+      ]).then((got) => {
+        const leadsData = got.get('leads', []).map(api.map.lead);
+        const usersData = got.get('users', []).map(api.map.user);
         setLeads(leadsData);
         setUsers(usersData);
         setIsLoading(false);
@@ -190,9 +195,16 @@ export const LeadsPage: React.FC = () => {
   const parseFile = (file: File) => {
     const ext = file.name.split('.').pop()?.toLowerCase();
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const data = e.target?.result;
-      let wb: XLSX.WorkBook;
+
+      // Loaded ON DEMAND. The spreadsheet parser is by far the largest
+      // dependency here, and importing it at the top of the file put it in
+      // the bundle every user downloads on every page — to support a modal
+      // most of them never open. It arrives when a file is actually dropped.
+      const XLSX = await import('xlsx');
+
+      let wb: XLSXTypes.WorkBook;
       if (ext === 'csv' || ext === 'tsv') {
         wb = XLSX.read(data as string, { type: 'string' });
       } else {
@@ -331,7 +343,7 @@ export const LeadsPage: React.FC = () => {
                   className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
                 >
                   <option value="all">Filter by Setter: All</option>
-                  {users.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN')).map(u => (
+                  {users.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN')).map(u => (
                     <option key={u.id} value={u.id}>@{u.username}</option>
                   ))}
                 </select>
@@ -345,7 +357,7 @@ export const LeadsPage: React.FC = () => {
                   className="w-full px-3 py-1.5 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-xs font-bold text-[#161616] focus:outline-none focus:border-[#161616]/40 cursor-pointer appearance-none"
                 >
                   <option value="all">Filter by Closer: All</option>
-                  {users.filter(u => u.status === 'Active' && (u.role === 'SALES_REP' || u.role === 'ADMIN')).map(u => (
+                  {users.filter(u => u.status === 'Active' && (u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN')).map(u => (
                     <option key={u.id} value={u.id}>@{u.username}</option>
                   ))}
                 </select>
@@ -565,12 +577,15 @@ export const LeadsPage: React.FC = () => {
       {/* New Lead Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-[#161616]/30 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[12px] border border-[#DFDFDF] w-full max-w-[480px] shadow-2xl overflow-hidden">
-            <div className="px-8 py-5 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9]">
+          {/* Capped to the viewport with the body scrolling inside it. Without
+              this the form simply grew past the bottom of the screen and the
+              Initialize / Cancel buttons became unreachable on a laptop. */}
+          <div className="bg-white rounded-[12px] border border-[#DFDFDF] w-full max-w-[480px] shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+            <div className="px-8 py-5 border-b border-[#DFDFDF] flex justify-between items-center bg-[#F9F9F9] shrink-0">
               <h3 className="text-[12px] font-black text-[#161616] uppercase tracking-[0.25em]">Initialize New Lead</h3>
               <button onClick={() => setShowModal(false)} className="text-[#161616]/20 hover:text-[#161616] transition-all p-1">✕</button>
             </div>
-            <form onSubmit={handleCreateLead} className="p-8 flex flex-col gap-6">
+            <form onSubmit={handleCreateLead} className="p-8 flex flex-col gap-6 overflow-y-auto flex-1 min-h-0">
               <div>
                 <label className="text-[10px] font-black text-[#161616]/30 uppercase tracking-widest block mb-2">Lead / Client Identity</label>
                 <input 
@@ -614,7 +629,7 @@ export const LeadsPage: React.FC = () => {
                       value={formData.setterId} onChange={e => setFormData({...formData, setterId: e.target.value})}
                       className="w-full px-4 py-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] text-[11px] focus:outline-none focus:border-[#161616] transition-all appearance-none cursor-pointer font-bold uppercase tracking-wider"
                     >
-                      {users.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN')).map(u => (
+                      {users.filter(u => u.status === 'Active' && (u.role === 'SETTER' || u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN')).map(u => (
                         <option key={u.id} value={u.id}>{u.username}</option>
                       ))}
                     </select>
@@ -626,7 +641,7 @@ export const LeadsPage: React.FC = () => {
                       className="w-full px-4 py-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] text-[11px] focus:outline-none focus:border-[#161616] transition-all appearance-none cursor-pointer font-bold uppercase tracking-wider"
                     >
                       <option value="">No Closer</option>
-                      {users.filter(u => u.status === 'Active' && (u.role === 'SALES_REP' || u.role === 'ADMIN')).map(u => (
+                      {users.filter(u => u.status === 'Active' && (u.role === 'SALES_REP' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN')).map(u => (
                         <option key={u.id} value={u.id}>{u.username}</option>
                       ))}
                     </select>

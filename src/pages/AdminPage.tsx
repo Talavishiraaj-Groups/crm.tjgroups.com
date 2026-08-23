@@ -12,6 +12,8 @@ import {
 import { ROLE_BADGE, ROLE_LABEL, AVAIL_DOT } from '../utils/badges';
 import { Log } from '../types';
 import { DailyLogsTab } from '../components/DailyLogsTab';
+import { ExportDataButton } from '../components/admin/ExportDataButton';
+import { TeamManagementPanel } from '../components/admin/TeamManagementPanel';
 
 export const AdminPage: React.FC = () => {
   const { role: currentUserRole, user } = useAuth();
@@ -32,6 +34,9 @@ export const AdminPage: React.FC = () => {
   // Modal state
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  // Held separately from `editingUser`: a password is write-only. It travels
+  // browser -> server and is never part of a User record coming back.
+  const [editPassword, setEditPassword] = useState('');
   const [editingRequest, setEditingRequest] = useState<AdminRequest | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [newUser, setNewUser] = useState({ username: '', password: '', role: 'SALES_REP' as UserRole, team: '' });
@@ -39,36 +44,41 @@ export const AdminPage: React.FC = () => {
 
   const fetchData = () => {
     setIsLoading(true);
-    Promise.all([
-      api.users.getAll(),
-      api.leads.getAll('SUPER_ADMIN', ''),
-      api.deals.getAll('SUPER_ADMIN', ''),
-      api.adminRequests.getAll()
-    ]).then(([usersData, leadsData, dealsData, requestsData]) => {
+    // Five requests became one, and the log read is now limited to the daily
+    // summaries this page actually shows rather than the whole history.
+    api.batch([
+      { key: 'users', action: 'getUsers' },
+      { key: 'leads', action: 'getLeads' },
+      { key: 'deals', action: 'getDeals' },
+      { key: 'requests', action: 'getAdminRequests' },
+      { key: 'logs', action: 'getLogs', payload: { logAction: 'DAILY_LOG' } },
+    ]).then((got) => {
+      const usersData = got.get<Record<string, unknown>[]>('users', []).map(api.map.user);
+      const leadsData = got.get<Record<string, unknown>[]>('leads', []).map(api.map.lead);
+      const dealsData = got.get<Record<string, unknown>[]>('deals', []).map(api.map.deal);
+      const requestsData = got.get<Record<string, unknown>[]>('requests', []).map(api.map.adminRequest);
+      const logsData = got.get<Record<string, unknown>[]>('logs', []).map(api.map.log);
+
       setAllUsers(usersData);
-      
-      const filteredUsers = currentUserRole === 'SUPER_ADMIN' 
-        ? usersData 
+
+      const filteredUsers = currentUserRole === 'SUPER_ADMIN'
+        ? usersData
         : usersData.filter(u => u.role !== 'SUPER_ADMIN');
-      setDisplayUsers(filteredUsers); 
+      setDisplayUsers(filteredUsers);
       setLeads(leadsData);
       setDeals(dealsData);
       setRequests(requestsData);
-      
-      api.logs.getByEntity('GLOBAL').then(logsData => {
-        setLogs(logsData);
-        const today = new Date().toDateString();
-        // Use the actual logged-in user's id — not hardcoded role strings
-        if (user) {
-          const loggedToday = logsData.some(l =>
-            (l.userId === user.id || l.userId === user.username) &&
-            l.action === 'DAILY_LOG' &&
-            new Date(l.timestamp).toDateString() === today
-          );
-          setHasLoggedToday(loggedToday);
-        }
-      });
-      
+      setLogs(logsData);
+
+      const today = new Date().toDateString();
+      // Use the actual logged-in user's id — not hardcoded role strings
+      if (user) {
+        setHasLoggedToday(logsData.some(l =>
+          (l.userId === user.id || l.userId === user.username) &&
+          new Date(l.timestamp).toDateString() === today
+        ));
+      }
+
       setIsLoading(false);
     }).catch(err => {
       console.error(err);
@@ -122,9 +132,10 @@ export const AdminPage: React.FC = () => {
         username: editingUser.username,
         role: editingUser.role,
         team: editingUser.team || undefined,
-        password: editingUser.password
+        password: editPassword || undefined
       });
       setEditingUser(null);
+      setEditPassword('');
       fetchData();
     } catch (err) {
       console.error(err);
@@ -249,6 +260,23 @@ export const AdminPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Team structure decides what each Admin can see, so it is managed
+          here rather than in a config file. */}
+      {!isLoading && (currentUserRole === 'SUPER_ADMIN' || currentUserRole === 'ADMIN') && (
+        <TeamManagementPanel />
+      )}
+
+      {/* Full-database export. SUPER_ADMIN only — the backend enforces this
+          too, so hiding the card is presentation, not the control. */}
+      {currentUserRole === 'SUPER_ADMIN' && !isLoading && (
+        <div className="bg-white border border-[#DFDFDF] rounded-[10px] p-5 shadow-sm">
+          <h3 className="text-[10px] font-bold text-[#161616]/30 uppercase tracking-widest mb-3">
+            Data Export
+          </h3>
+          <ExportDataButton />
+        </div>
+      )}
 
       {isLoading ? (
         <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-12 text-center text-[#161616]/30 italic text-sm">Loading control panel...</div>
@@ -551,7 +579,7 @@ export const AdminPage: React.FC = () => {
               </div>
               <div>
                 <label className="text-[10px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-1">Update Password</label>
-                <input type="text" value={editingUser.password || ''} onChange={e => setEditingUser({...editingUser, password: e.target.value})} placeholder="Leave blank to keep current" className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" />
+                <input type="password" autoComplete="new-password" value={editPassword} onChange={e => setEditPassword(e.target.value)} placeholder="Leave blank to keep current" className="w-full px-3 py-2 border border-[#DFDFDF] rounded-[4px] text-sm focus:outline-none focus:border-[#161616]/50" />
               </div>
               <div className="flex justify-end gap-2 mt-4">
                 <button type="button" onClick={() => setEditingUser(null)} className="px-4 py-2 text-xs font-bold text-[#161616]/50 hover:text-[#161616]">CANCEL</button>

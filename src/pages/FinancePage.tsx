@@ -15,11 +15,15 @@ export const FinancePage: React.FC = () => {
   const fetchFinanceData = () => {
     if (currentUserRole !== 'SUPER_ADMIN') return;
     setIsLoading(true);
-    Promise.all([
-      api.finance.getCommissions(), 
-      api.finance.getKPIs(),
-      api.users.getAll()
-    ]).then(([comm, kpi, usersData]) => {
+    // One request, not three.
+    api.batch([
+      { key: 'commissions', action: 'getCommissions' },
+      { key: 'kpis', action: 'getKPIs' },
+      { key: 'users', action: 'getUsers' },
+    ]).then((got) => {
+      const comm = got.get<Record<string, unknown>[]>('commissions', []).map(api.map.commission);
+      const kpi = got.get('kpis', {} as never);
+      const usersData = got.get<Record<string, unknown>[]>('users', []).map(api.map.user);
       setCommissions(comm);
       setKpis(kpi);
       setUsers(usersData);

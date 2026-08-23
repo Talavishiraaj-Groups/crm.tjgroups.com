@@ -41,12 +41,18 @@ export const DealsPage: React.FC = () => {
   const fetchData = () => {
     if (user && currentUserRole) {
       setIsLoading(true);
-      Promise.all([
-        api.deals.getAll(currentUserRole, user.id),
-        api.leads.getAll(currentUserRole, user.id),
-        api.users.getAll(),
-        api.finance.getCommissions()
-      ]).then(([dealsData, leadsData, usersData, commData]) => {
+      // One request, not four. The browser can issue four in parallel; the
+      // backend still pays four cold starts.
+      api.batch([
+        { key: 'deals', action: 'getDeals' },
+        { key: 'leads', action: 'getLeads' },
+        { key: 'users', action: 'getUsers' },
+        { key: 'commissions', action: 'getCommissions' },
+      ]).then((got) => {
+        const dealsData = got.get('deals', []).map(api.map.deal);
+        const leadsData = got.get('leads', []).map(api.map.lead);
+        const usersData = got.get('users', []).map(api.map.user);
+        const commData = got.get('commissions', []).map(api.map.commission);
         setDeals(dealsData);
         setLeads(leadsData);
         setUsers(usersData);
@@ -157,18 +163,29 @@ export const DealsPage: React.FC = () => {
     }
     setIsSaving(true);
     try {
-      await api.deals.updateStatus(selectedDeal.id, 'Won', {
+      const alreadyWon = selectedDeal.status.toUpperCase().includes('WON');
+      const split = {
         setterAmount: commissionData.setterAmount,
         closerAmount: commissionData.closerAmount,
         setterId: commissionData.setterId,
         closerId: commissionData.closerId
-      });
+      };
+
+      if (alreadyWon) {
+        // Amend the existing commission. Re-running the win flow here is what
+        // used to append a SECOND commission row for the same deal every time
+        // "EDIT COMM" was saved.
+        await api.deals.reviseCommission(selectedDeal.id, split);
+      } else {
+        await api.deals.updateStatus(selectedDeal.id, 'Won', split);
+      }
+
       setShowWonModal(false);
       setSelectedDeal(null);
       fetchData();
     } catch (err) {
       console.error(err);
-      alert('Failed to update commission settings.');
+      alert(err instanceof Error ? err.message : 'Failed to update commission settings.');
     } finally {
       setIsSaving(false);
     }

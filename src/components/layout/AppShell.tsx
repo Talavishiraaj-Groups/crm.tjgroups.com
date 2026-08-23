@@ -1,7 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
+import { ApiHealthBanner } from '../ui/ApiHealthBanner';
+import { EnvironmentBanner } from '../ui/EnvironmentBanner';
+import { ChangePasswordModal } from '../auth/ChangePasswordModal';
+import { useAuth } from '../../context/AuthContext';
 
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
@@ -14,10 +18,20 @@ const PAGE_TITLES: Record<string, string> = {
   '/team': 'Team & Availability',
   '/finance': 'Finance & Commissions',
   '/admin': 'User Management',
+  '/insights': 'Insights & Productivity',
+  '/deleted-leads': 'Deleted Leads',
 };
 
 export const AppShell: React.FC = () => {
   const location = useLocation();
+  const { user, refreshUser } = useAuth();
+
+  // Dismissed only after an actual change. A flagged account keeps seeing
+  // this on every page until the password is replaced — the flag exists
+  // because the old value was readable by other people, and a prompt anyone
+  // can click past would not address that.
+  const [changed, setChanged] = useState(false);
+  const mustChange = Boolean(user?.mustChangePassword) && !changed;
 
   const getTitle = (path: string) => {
     // Exact match
@@ -34,9 +48,22 @@ export const AppShell: React.FC = () => {
       <main className="flex-1 ml-[260px]">
         <TopBar title={getTitle(location.pathname)} />
         <div className="p-8 mt-16">
+          <EnvironmentBanner />
+          <ApiHealthBanner />
           <Outlet />
         </div>
       </main>
+
+      {mustChange && (
+        <ChangePasswordModal
+          required
+          onDone={() => {
+            setChanged(true);
+            // Re-read the user so the flag clears for this session too.
+            refreshUser().catch(() => {});
+          }}
+        />
+      )}
     </div>
   );
 };

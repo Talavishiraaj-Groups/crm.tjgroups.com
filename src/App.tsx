@@ -12,6 +12,8 @@ import { TeamPage } from './pages/TeamPage';
 import { FinancePage } from './pages/FinancePage';
 import { AdminPage } from './pages/AdminPage';
 import { GuidePage } from './pages/GuidePage';
+import { InsightsPage } from './pages/InsightsPage';
+import { DeletedLeadsPage } from './pages/DeletedLeadsPage';
 import { MeetingsPage } from './pages/MeetingsPage';
 import { DailyLogsPage } from './pages/DailyLogsPage';
 import { OAuthCallbackPage } from './pages/OAuthCallbackPage';
@@ -58,6 +60,17 @@ function AppRoutes() {
           <Route path="daily-logs" element={<DailyLogsPage />} />
           <Route path="oauth/callback" element={<OAuthCallbackPage />} />
           <Route path="guide" element={<GuidePage />} />
+          {/* Everyone may see their OWN numbers; the backend scopes the rows
+              and hides organisation analytics from non-SUPER_ADMINs. */}
+          <Route path="insights" element={<InsightsPage />} />
+          <Route
+            path="deleted-leads"
+            element={
+              <ProtectedRoute roles={['SUPER_ADMIN', 'ADMIN']}>
+                <DeletedLeadsPage />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Admin + Super Admin */}
           <Route

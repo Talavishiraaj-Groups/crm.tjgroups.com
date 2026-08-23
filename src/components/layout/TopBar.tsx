@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Bell, Search, Calendar, AlertCircle, Clock, CheckCircle2, ChevronRight, Mail } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Bell, Calendar, AlertCircle, Clock, CheckCircle2, ChevronRight, Mail } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { ROLE_BADGE, ROLE_LABEL } from '../../utils/badges';
 import { api } from '../../api/services';
@@ -10,7 +10,7 @@ export interface NotificationItem {
   id: string;
   title: string;
   subtitle: string;
-  type: 'overdue' | 'today' | 'request' | 'email_sent_today';
+  type: 'overdue' | 'today' | 'request' | 'email_sent_today' | 'email_received' | 'followup_stale';
   link: string;
 }
 
@@ -21,80 +21,151 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const fetchNotifications = async () => {
-      if (!user || !role) return;
-      try {
-        const todayStr = new Date().toISOString().split('T')[0];
-        const items: NotificationItem[] = [];
+  const fetchNotifications = useCallback(async () => {
+    if (!user || !role) return;
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      // Midnight today, as an instant, so the server can discard older rows
+      // before it does any other work.
+      const since = new Date(`${todayStr}T00:00:00`).toISOString();
 
-        // Fetch leads assigned/visible to user
-        const leads: Lead[] = await api.leads.getAll(role, user.id).catch(() => []);
-        
-        for (const lead of leads) {
-          if (lead.nextFollowUp) {
-            if (lead.nextFollowUp < todayStr) {
-              items.push({
-                id: `followup-overdue-${lead.id}`,
-                title: `Overdue Follow-up: ${lead.name}`,
-                subtitle: `Scheduled for ${lead.nextFollowUp}`,
-                type: 'overdue',
-                link: `/leads/${lead.id}`
-              });
-            } else if (lead.nextFollowUp === todayStr) {
-              items.push({
-                id: `followup-today-${lead.id}`,
-                title: `Follow-up Due Today: ${lead.name}`,
-                subtitle: `Scheduled for today`,
-                type: 'today',
-                link: `/leads/${lead.id}`
-              });
-            }
-          }
+      const got = await api.batch([
+        { key: 'leads', action: 'getLeads' },
+        // Today's outbound email across every lead the caller can see, in one
+        // read. This used to be ONE REQUEST PER LEAD inside a loop — 183
+        // requests a minute, forever, against a free-tier backend with a daily
+        // runtime budget. It was by far the most expensive thing in the app,
+        // and it ran on every screen because this bar is in the shell.
+        { key: 'emailLogs', action: 'getLogs', payload: { logAction: 'EMAIL,EMAIL_SENT', since } },
+        // Replies that arrived while nobody was looking. This is the one
+        // notification people actually need: a client got in touch.
+        { key: 'replies', action: 'getLogs', payload: { logAction: 'EMAIL_RECEIVED', since } },
+        { key: 'requests', action: 'getAdminRequests' },
+      ]);
 
-          // Check if email was sent today for this lead
-          const logs = await api.logs.getByEntity(lead.id).catch(() => []);
-          const sentToday = logs.some(l => 
-            (l.action === 'EMAIL' || (l.details && l.details.includes('Sent email'))) && 
-            l.timestamp?.startsWith(todayStr)
-          );
+      const leads = got.get<Record<string, unknown>[]>('leads', []).map(api.map.lead);
+      const emailLogs = got.get<Record<string, unknown>[]>('emailLogs', []).map(api.map.log);
 
-          if (sentToday && (!lead.nextFollowUp || lead.nextFollowUp <= todayStr)) {
+      // Which leads had mail sent today — resolved once, then looked up.
+      const emailedToday = new Set(
+        emailLogs
+          .filter(l => l.timestamp?.startsWith(todayStr))
+          .map(l => l.entityId)
+      );
+
+      const items: NotificationItem[] = [];
+
+      // A reply from a client comes first — it is the only item here that
+      // someone outside the company initiated, and the only one with a
+      // counterparty waiting on an answer.
+      const leadById = new Map(leads.map((l) => [l.id, l]));
+      for (const entry of got.get<Record<string, unknown>[]>('replies', []).map(api.map.log)) {
+        const lead = leadById.get(entry.entityId);
+        if (!lead) continue;
+        items.push({
+          id: `reply-${entry.id}`,
+          title: `Reply from ${lead.name}`,
+          subtitle: entry.details || 'A new message is waiting.',
+          type: 'email_received',
+          link: `/leads/${lead.id}`,
+        });
+      }
+
+      // Follow-ups that have been sitting overdue for more than a day. An
+      // overdue date on its own is noise by the second day; one that has been
+      // ignored for 24 hours is a decision someone has quietly not made.
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      for (const lead of leads) {
+        if (!lead.nextFollowUp || lead.nextFollowUp >= todayStr) continue;
+        if (lead.followUpStatus === 'Completed') continue;
+        const due = Date.parse(`${lead.nextFollowUp}T23:59:59`);
+        if (Number.isNaN(due) || due > dayAgo) continue;
+        items.push({
+          id: `stale-${lead.id}`,
+          title: `${lead.name}: follow-up over 24h overdue`,
+          subtitle: 'Log what happened, or set a new date and say why.',
+          type: 'followup_stale',
+          link: `/leads/${lead.id}`,
+        });
+      }
+
+      for (const lead of leads) {
+        if (lead.nextFollowUp) {
+          if (lead.nextFollowUp < todayStr) {
             items.push({
-              id: `email-sent-today-${lead.id}`,
-              title: `Email Sent Today: ${lead.name}`,
-              subtitle: `Mandatory: Set follow-up date (Max 3 days)`,
-              type: 'email_sent_today',
+              id: `followup-overdue-${lead.id}`,
+              title: `Overdue Follow-up: ${lead.name}`,
+              subtitle: `Scheduled for ${lead.nextFollowUp}`,
+              type: 'overdue',
+              link: `/leads/${lead.id}`
+            });
+          } else if (lead.nextFollowUp === todayStr) {
+            items.push({
+              id: `followup-today-${lead.id}`,
+              title: `Follow-up Due Today: ${lead.name}`,
+              subtitle: `Scheduled for today`,
+              type: 'today',
               link: `/leads/${lead.id}`
             });
           }
         }
 
-        // Admin requests for Admins
-        if (role === 'SUPER_ADMIN' || role === 'ADMIN') {
-          const requests: AdminRequest[] = await api.adminRequests.getAll().catch(() => []);
-          const pending = requests.filter(r => r.status === 'Pending');
-          pending.forEach(req => {
-            items.push({
-              id: `req-${req.id}`,
-              title: `Pending ${req.type.toUpperCase()} Request`,
-              subtitle: `Requested by team member`,
-              type: 'request',
-              link: '/admin'
-            });
+        if (emailedToday.has(lead.id) && (!lead.nextFollowUp || lead.nextFollowUp <= todayStr)) {
+          items.push({
+            id: `email-sent-today-${lead.id}`,
+            title: `Email Sent Today: ${lead.name}`,
+            subtitle: `Mandatory: Set follow-up date (Max 3 days)`,
+            type: 'email_sent_today',
+            link: `/leads/${lead.id}`
           });
         }
-
-        setNotifications(items);
-      } catch (err) {
-        console.error('Failed to fetch notifications:', err);
       }
-    };
 
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 60000); // refresh every minute
-    return () => clearInterval(interval);
+      if (role === 'SUPER_ADMIN' || role === 'ADMIN') {
+        const requests = got.get<Record<string, unknown>[]>('requests', []).map(api.map.adminRequest);
+        for (const req of requests.filter((r: AdminRequest) => r.status === 'Pending')) {
+          items.push({
+            id: `req-${req.id}`,
+            title: `Pending ${req.type.toUpperCase()} Request`,
+            subtitle: `Requested by team member`,
+            type: 'request',
+            link: '/admin'
+          });
+        }
+      }
+
+      setNotifications(items);
+    } catch (err) {
+      console.error('Failed to fetch notifications:', err);
+    }
   }, [user, role]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchNotifications();
+
+    // Polling costs real budget: this backend has a daily runtime allowance
+    // shared by everyone signed in. A badge does not need minute-accuracy, and
+    // a tab nobody is looking at does not need refreshing at all.
+    const POLL_MS = 5 * 60 * 1000;
+
+    const tick = () => {
+      if (document.visibilityState === 'visible') fetchNotifications();
+    };
+    const interval = setInterval(tick, POLL_MS);
+
+    // Coming back to the tab is exactly when stale numbers are noticed, so
+    // refresh then rather than waiting out the rest of the interval.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchNotifications();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [fetchNotifications]);
 
   // Close popover on click outside
   useEffect(() => {
@@ -115,15 +186,10 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
       <h1 className="text-[15px] font-bold text-[#161616] tracking-tight">{title}</h1>
 
       <div className="flex items-center gap-4">
-        {/* Search */}
-        <div className="relative">
-          <Search className="w-4 h-4 text-[#161616]/20 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search..."
-            className="pl-9 pr-4 py-2 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] text-sm focus:outline-none focus:border-[#161616]/30 transition-all w-[200px] text-[#161616] placeholder:text-[#161616]/30"
-          />
-        </div>
+        {/* A global search box used to sit here. It had no handler at all —
+            typing did nothing — so it was removed rather than left as a
+            control that looks functional and is not. The Leads and Deals
+            pages have working search of their own. */}
 
         {/* Notification Bell with Dropdown */}
         <div className="relative" ref={popoverRef}>

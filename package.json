@@ -5,9 +5,26 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "node local/scripts/dev-server.mjs",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --force",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test local/tests/",
+    "test:baseline": "node --test local/tests/baseline-vulnerabilities.test.mjs",
+    "test:security": "node --test local/tests/security-rbac.test.mjs",
+    "test:contract": "node --test local/tests/api-contract.test.mjs",
+    "test:migration": "node --test local/tests/migration.test.mjs",
+    "test:smoke": "node local/scripts/smoke.mjs",
+    "verify:local": "node local/scripts/verify-local.mjs",
+    "report:data-preservation": "node local/scripts/data-preservation-report.mjs",
+    "check:production-safety": "node local/scripts/production-safety-scan.mjs",
+    "check:docs": "node local/scripts/doc-consistency-check.mjs",
+    "prove:reset-safety": "node local/scripts/prove-reset-safety.mjs",
+    "convert:drive": "node local/scripts/convert-drive-export.mjs",
+    "dev:live": "node local/scripts/dev-live.mjs",
+    "check:teams": "node local/scripts/check-team-config.mjs",
+    "rehearse": "node local/scripts/rehearse.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.100.6",

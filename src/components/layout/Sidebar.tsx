@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { ChangePasswordModal } from '../auth/ChangePasswordModal';
 import {
   LayoutDashboard,
   Users,
@@ -9,8 +10,11 @@ import {
   UserCircle,
   DollarSign,
   ShieldCheck,
+  KeyRound,
   LogOut,
   BookOpen,
+  BarChart3,
+  Archive,
   CalendarDays,
   ClipboardCheck
 } from 'lucide-react';
@@ -28,6 +32,8 @@ const navItems = [
   { name: 'Team', icon: UserCircle, path: '/team', roles: ['SUPER_ADMIN', 'ADMIN'] },
   { name: 'Finance', icon: DollarSign, path: '/finance', roles: ['SUPER_ADMIN'] },
   { name: 'Admin', icon: ShieldCheck, path: '/admin', roles: ['SUPER_ADMIN', 'ADMIN'] },
+  { name: 'Insights', icon: BarChart3, path: '/insights', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
+  { name: 'Deleted Leads', icon: Archive, path: '/deleted-leads', roles: ['SUPER_ADMIN', 'ADMIN'] },
   { name: 'Guide', icon: BookOpen, path: '/guide', roles: ['SUPER_ADMIN', 'ADMIN', 'SALES_REP', 'SETTER'] },
 ];
 
@@ -40,6 +46,7 @@ const roleLabel: Record<string, string> = {
 
 export const Sidebar: React.FC = () => {
   const { role, user, logout } = useAuth();
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -87,6 +94,13 @@ export const Sidebar: React.FC = () => {
             <p className="text-[10px] text-[#161616]/40">{roleLabel[role || ''] || role}</p>
           </div>
           <button
+            onClick={() => setShowPasswordChange(true)}
+            className="p-1.5 rounded-[6px] hover:bg-[#F9F9F9] text-[#161616]/40 hover:text-[#161616] transition-all"
+            title="Change my password"
+          >
+            <KeyRound className="w-4 h-4" />
+          </button>
+          <button
             onClick={handleLogout}
             className="p-1.5 rounded-[6px] hover:bg-[#F9F9F9] text-[#161616]/40 hover:text-red-500 transition-all"
             title="Logout"
@@ -94,6 +108,16 @@ export const Sidebar: React.FC = () => {
             <LogOut className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Anyone may change their own password at any time, not only when
+            they have been flagged. */}
+        {showPasswordChange && (
+          <ChangePasswordModal
+            required={false}
+            onClose={() => setShowPasswordChange(false)}
+            onDone={() => setShowPasswordChange(false)}
+          />
+        )}
 
         {/* Attribution Footer */}
         <div className="mt-4 px-1 text-[9px] text-[#161616]/30 font-medium leading-relaxed">

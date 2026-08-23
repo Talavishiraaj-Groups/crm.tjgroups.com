@@ -23,3 +23,13 @@ dist-ssr
 *.sln
 *.sw?
 .env
+# Real CRM data pulled from Drive for local testing — never commit
+local/.data/
+*.crm-export.json
+# Any env file, however named (.env, .env.env, .env.production, ...)
+.env*
+!.env*.example
+
+# Stray debugging output from probing the deployed API
+curl_out.json
+*.response.json

@@ -55,11 +55,15 @@ export const ProjectsPage: React.FC = () => {
   const fetchData = () => {
     if (user && role) {
       setIsLoading(true);
-      Promise.all([
-        api.projects.getAll(role, user.id),
-        api.deals.getAll(role, user.id),
-        api.users.getAll()
-      ]).then(([pData, dData, uData]) => {
+      // One request, not three.
+      api.batch([
+        { key: 'projects', action: 'getProjects' },
+        { key: 'deals', action: 'getDeals' },
+        { key: 'users', action: 'getUsers' },
+      ]).then((got) => {
+        const pData = got.get('projects', []).map(api.map.project);
+        const dData = got.get('deals', []).map(api.map.deal);
+        const uData = got.get('users', []).map(api.map.user);
         setProjects(pData);
         setDeals(dData.filter(d => d.status === 'Won'));
         setUsers(uData);
@@ -334,7 +338,12 @@ export const ProjectsPage: React.FC = () => {
                   {projectLogs.length === 0 ? (
                     <div className="text-[11px] text-[#161616]/30 italic py-10 text-center border border-dashed border-[#DFDFDF] rounded-[6px]">No updates recorded for this project.</div>
                   ) : (
-                    projectLogs.slice().reverse().map(log => (
+                    // Newest first, matching the lead activity log.
+                    projectLogs
+                      .slice()
+                      .sort((a, b) =>
+                        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                      .map(log => (
                       <div key={log.id} className="bg-white border border-[#DFDFDF] rounded-[6px] p-3 shadow-sm">
                         <div className="flex justify-between items-baseline mb-1">
                           <span className="text-[9px] font-black text-[#161616]/20 uppercase tracking-tighter">@{usersList.find(u => u.id === log.userId)?.username || log.userId.slice(0, 8)}</span>

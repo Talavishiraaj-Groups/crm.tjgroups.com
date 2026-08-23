@@ -1,25 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { 
-  Users, Briefcase, TrendingUp, AlertCircle, ArrowRight, 
-  Clock, MessageSquare, Phone, Mail, ShieldCheck, 
-  ClipboardCheck, Send, CheckCircle2
+  Users, Briefcase, TrendingUp, AlertCircle, ArrowRight,
+  Clock, Mail, ShieldCheck, ClipboardCheck, Send, CheckCircle2
 } from 'lucide-react';
 import { api } from '../api/services';
 import { useNavigate } from 'react-router-dom';
-import { STATUS_BADGE } from '../utils/badges';
-import { Lead, Deal, Project, AdminRequest, Log, User } from '../types';
-
-const LOG_ICON: Record<string, any> = {
-  CALL: Phone,
-  MESSAGE: MessageSquare,
-  EMAIL: Mail,
-  STATUS_CHANGE: Clock,
-  CONVERSION: TrendingUp,
-  GUIDANCE: AlertCircle,
-  COMMISSION_GENERATED: ShieldCheck,
-  DAILY_LOG: ClipboardCheck
-};
+import { Lead, Deal, Project, AdminRequest, User } from '../types';
+import { ZohoConnectButton } from '../components/zoho/ZohoConnectButton';
+import { GlobalActivityFeed } from '../components/dashboard/GlobalActivityFeed';
 
 export const Dashboard: React.FC = () => {
   const { role, user } = useAuth();
@@ -28,7 +17,6 @@ export const Dashboard: React.FC = () => {
   const [myLeads, setMyLeads] = useState<Lead[]>([]);
   const [myDeals, setMyDeals] = useState<Deal[]>([]);
   const [myProjects, setMyProjects] = useState<Project[]>([]);
-  const [recentLogs, setRecentLogs] = useState<Log[]>([]);
   const [pendingRequests, setPendingRequests] = useState<AdminRequest[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,54 +26,59 @@ export const Dashboard: React.FC = () => {
   const [isLoggingDaily, setIsLoggingDaily] = useState(false);
   const [hasLoggedToday, setHasLoggedToday] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!user || !role) return;
     setIsLoading(true);
-    
+
     try {
-      const [leads, deals, projects, requests] = await Promise.all([
-        api.leads.getAll(role, user.id).catch(() => [] as Lead[]),
-        api.deals.getAll(role, user.id).catch(() => [] as Deal[]),
-        api.projects.getAll(role, user.id).catch(() => [] as Project[]),
-        api.adminRequests.getAll().catch(() => [] as AdminRequest[])
+      // Six requests became one. On the deployed backend each invocation costs
+      // a second or more before it does any work, so this is the difference
+      // the user actually notices on a cold dashboard.
+      const got = await api.batch([
+        { key: 'leads', action: 'getLeads' },
+        { key: 'deals', action: 'getDeals' },
+        { key: 'projects', action: 'getProjects' },
+        { key: 'requests', action: 'getAdminRequests' },
+        { key: 'users', action: 'getUsers' },
+        // Only the daily summaries. This used to pull every log row in the
+        // database and throw almost all of them away in the browser.
+        { key: 'dailyLogs', action: 'getLogs', payload: { logAction: 'DAILY_LOG' } },
       ]);
+
+      const leads = got.get<Record<string, unknown>[]>('leads', []).map(api.map.lead);
+      const deals = got.get<Record<string, unknown>[]>('deals', []).map(api.map.deal);
+      const projects = got.get<Record<string, unknown>[]>('projects', []).map(api.map.project);
+      const requests = got.get<Record<string, unknown>[]>('requests', []).map(api.map.adminRequest);
+      const usersData = got.get<Record<string, unknown>[]>('users', []).map(api.map.user);
+      const dailyLogs = got.get<Record<string, unknown>[]>('dailyLogs', []).map(api.map.log);
 
       setMyLeads(leads);
       setMyDeals(deals);
       setMyProjects(projects);
       setPendingRequests(requests.filter(r => r.status === 'Pending'));
+      setAllUsers(usersData);
 
-      try {
-        // Fetch all logs to check for daily summary
-        const [logs, usersData] = await Promise.all([
-          api.logs.getByEntity('GLOBAL'),
-          api.users.getAll().catch(() => [] as User[])
-        ]);
-        const sortedLogs = (logs || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        setRecentLogs(sortedLogs);
-        setAllUsers(usersData);
-        
-        // Check if user has logged today (DAILY_LOG)
-        const today = new Date().toDateString();
-        const loggedToday = sortedLogs.some(l => 
-          l.action === 'DAILY_LOG' && 
-          l.userId === user.id && 
-          new Date(l.timestamp).toDateString() === today
-        );
-        setHasLoggedToday(loggedToday);
-      } catch (err) {
-        setRecentLogs([]);
-      }
+      // The only thing this page needs from the log history: whether this
+      // person has written today's summary. The full list belongs to the
+      // Daily Logs page, which fetches its own.
+      const today = new Date().toDateString();
+      setHasLoggedToday(dailyLogs.some(l =>
+        l.userId === user.id &&
+        new Date(l.timestamp).toDateString() === today
+      ));
     } catch (err) {
       console.error("Dashboard fetch error:", err);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user, role]);
 
   useEffect(() => {
+    // Loading remote data on mount. State lands after the request resolves,
+    // never synchronously inside the effect body.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
-  }, [role, user]);
+  }, [fetchData]);
 
   const handleDailyLog = async () => {
     if (!dailyNote.trim() || !user) return;
@@ -101,9 +94,9 @@ export const Dashboard: React.FC = () => {
       setDailyNote('');
       setHasLoggedToday(true);
       fetchData();
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      alert('Failed to log activity: ' + (err.message || 'Unknown error'));
+      alert('Failed to log activity: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
       setIsLoggingDaily(false);
     }
@@ -288,41 +281,16 @@ export const Dashboard: React.FC = () => {
             </div>
           )}
 
-          {/* Activity Feed */}
-          <div className="bg-white border border-[#DFDFDF] rounded-[8px] overflow-hidden shadow-sm">
-            <div className="flex justify-between items-center px-6 py-5 border-b border-[#DFDFDF] bg-[#F9F9F9]">
-              <h3 className="text-[11px] font-black text-[#161616]/40 uppercase tracking-[0.2em]">Global Operational Activity</h3>
-              <Clock className="w-4 h-4 text-[#161616]/20" />
-            </div>
-            <div className="p-0 max-h-[500px] overflow-y-auto">
-              {recentLogs.length === 0 ? (
-                <div className="px-6 py-20 text-center text-[#161616]/30 italic text-sm">No operational data available.</div>
-              ) : (
-                recentLogs.map((log) => {
-                  const Icon = LOG_ICON[log.action] || Clock;
-                  return (
-                    <div key={log.id} className="flex items-center gap-5 px-6 py-4 hover:bg-[#F9F9F9] transition-colors border-b border-[#DFDFDF] last:border-0 group cursor-pointer" onClick={() => log.entityType === 'Lead' && navigate(`/leads/${log.entityId}`)}>
-                      <div className="w-10 h-10 rounded-full bg-[#161616]/5 flex items-center justify-center shrink-0 group-hover:bg-[#161616] transition-all">
-                        <Icon className="w-4 h-4 text-[#161616]/30 group-hover:text-white transition-all" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-center mb-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-black text-[#161616] uppercase tracking-tighter">{log.action}</span>
-                            <span className="text-[9px] font-bold text-[#161616]/40 uppercase">@{allUsers.find(u => u.id === log.userId)?.username || log.userId.slice(0, 8)}</span>
-                          </div>
-                          <span className="text-[10px] font-mono text-[#161616]/30">
-                            {new Date(log.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })} · {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-[#161616]/60 font-medium truncate tracking-tight">{log.details}</p>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
+          {/* Activity for ONE calendar day, in the viewer''s timezone.
+              This used to render the entire log history newest-first, so
+              seeing this morning meant scrolling past months. Managers get
+              arrows to step back through previous days. */}
+          <GlobalActivityFeed
+            nameOf={(userId) =>
+              allUsers.find((u) => u.id === userId)?.username || String(userId).slice(0, 8)
+            }
+            canBrowseDays={role === 'SUPER_ADMIN' || role === 'ADMIN'}
+          />
         </div>
 
         {/* Right Column */}
@@ -336,7 +304,7 @@ export const Dashboard: React.FC = () => {
               </div>
               {(() => {
                 const fullUser = allUsers.find(u => u.id === user.id);
-                const isLinked = fullUser?.zohoEmail || fullUser?.zohoRefreshToken;
+                const isLinked = Boolean(fullUser?.zohoEmail || fullUser?.zohoLinked);
                 
                 if (isLinked) {
                   return (
@@ -364,22 +332,10 @@ export const Dashboard: React.FC = () => {
                   );
                 }
 
-                const client_id = "1000.TPZZG4KWERXN232O5CWEUG3G2KMYVX";
-                const redirect_uri = encodeURIComponent(window.location.origin + '/oauth/callback');
-                const scope = encodeURIComponent("ZohoMail.accounts.READ,ZohoMail.messages.READ,ZohoMail.messages.CREATE");
-                const authUrl = `https://accounts.zoho.in/oauth/v2/auth?scope=${scope}&client_id=${client_id}&response_type=code&redirect_uri=${redirect_uri}&access_type=offline&prompt=consent`;
-
-                return (
-                  <div className="space-y-3">
-                    <p className="text-xs text-[#161616]/60 leading-relaxed font-medium">Link your Zoho Business Mail to view communications and send mail directly from the CRM.</p>
-                    <a
-                      href={authUrl}
-                      className="w-full bg-[#161616] text-white py-2.5 rounded-[4px] text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-all flex items-center justify-center gap-2"
-                    >
-                      Connect Zoho Mail
-                    </a>
-                  </div>
-                );
+                // The authorisation URL is minted server-side so the OAuth
+                // client id stays out of the browser bundle and the request
+                // carries a signed, user-bound `state`.
+                return <ZohoConnectButton />;
               })()}
             </div>
           )}

@@ -6,6 +6,20 @@ import {
   Maximize2, Copy, Check, X, ArrowUpRight, ArrowDownLeft, Clock, Eye, FileText, CheckCircle2, Type
 } from 'lucide-react';
 
+/**
+ * Render an email address the way a person writes it.
+ *
+ * Zoho returns addresses HTML-escaped and angle-wrapped, so the raw value is
+ * literally `&lt;someone@example.com&gt;`. Only the subject was being decoded,
+ * so every From/To line showed the entities verbatim.
+ */
+function formatAddress(value?: string): string {
+  const decoded = decodeHtmlEntities(String(value || '')).trim();
+  if (!decoded) return '';
+  // `"Name" <addr>` keeps the name; a bare `<addr>` loses the brackets.
+  const wrapped = decoded.match(/^<([^>]+)>$/);
+  return wrapped ? wrapped[1] : decoded;
+}
 interface ZohoEmailViewerProps {
   emails: ZohoEmailItem[];
   leadEmail: string;
@@ -94,17 +108,24 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
     const existingSubjects = new Set(allEmails.map(e => decodeHtmlEntities(e.subject || '').trim().toLowerCase()));
 
     crmLogs.forEach(log => {
-      if (log.action === 'EMAIL' || (log.details && (log.details.includes('Sent email via Zoho') || log.details.includes('Subject:')))) {
-        let subject = 'Email Activity';
-        let content = log.details || '';
+      // Normalise first. This read `log.details.match(...)` after a condition
+      // that could pass on `action === 'EMAIL'` alone, so a legacy row with an
+      // empty Details cell threw during render and blanked the whole tab.
+      const details = log.details ?? '';
+      const isEmailish = log.action === 'EMAIL' ||
+        details.includes('Sent email via Zoho') || details.includes('Subject:');
 
-        const subjectMatch = log.details.match(/\[Subject:\s*([^\]]+)\]/i);
+      if (isEmailish) {
+        let subject = 'Email Activity';
+        let content = details;
+
+        const subjectMatch = details.match(/\[Subject:\s*([^\]]+)\]/i);
         if (subjectMatch) {
           subject = subjectMatch[1].trim();
-          const bracketIdx = log.details.indexOf(']');
-          content = log.details.substring(bracketIdx + 1).trim();
-        } else if (log.details.startsWith('Sent email via Zoho:')) {
-          content = log.details.replace(/^Sent email via Zoho:\s*/i, '').trim();
+          const bracketIdx = details.indexOf(']');
+          content = details.substring(bracketIdx + 1).trim();
+        } else if (details.startsWith('Sent email via Zoho:')) {
+          content = details.replace(/^Sent email via Zoho:\s*/i, '').trim();
         }
 
         const normSubject = subject.trim().toLowerCase();
@@ -136,6 +157,8 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
     return subject.includes(query) || summary.includes(query) || content.includes(query) || sender.includes(query);
   });
 
+  const storedCount = allEmails.filter(e => e.stored).length;
+
   const sortedEmails = [...filteredEmails].sort((a, b) => {
     const timeA = new Date(a.timestamp).getTime();
     const timeB = new Date(b.timestamp).getTime();
@@ -150,6 +173,14 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
           <span className="bg-blue-100 text-blue-800 text-[10px] font-black px-2 py-1 rounded-[4px] uppercase tracking-wider flex items-center gap-1">
             <Mail className="w-3.5 h-3.5" /> {allEmails.length} {allEmails.length === 1 ? 'EMAIL' : 'EMAILS'} SYNCED
           </span>
+          {storedCount > 0 && (
+            <span
+              className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-1 rounded-[4px] uppercase tracking-wider"
+              title="These are held in the CRM rather than read live from the mailbox. They keep the conversation intact, but hold only the envelope and a summary."
+            >
+              {storedCount} FROM CRM ARCHIVE
+            </span>
+          )}
           <span className="text-[11px] text-[#161616]/50 font-medium">with {leadName} ({leadEmail})</span>
         </div>
 
@@ -212,7 +243,7 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
           )}
         </div>
       ) : (
-        <div className="flex flex-col gap-4 relative ml-2">
+        <div className="flex flex-col gap-4 relative ml-2 max-h-[600px] overflow-y-auto pr-2">
           <div className="absolute left-[7px] top-3 bottom-3 w-px bg-[#DFDFDF]"></div>
 
           {sortedEmails.map((item) => {
@@ -249,8 +280,13 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                         )}
                       </span>
 
-                      <span className="text-[8px] font-black bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded-[3px] uppercase tracking-wider">
-                        Zoho Mail
+                      <span
+                        className="text-[8px] font-black bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded-[3px] uppercase tracking-wider"
+                        title={item.stored
+                          ? 'Held in the CRM. Kept even if the message leaves the mailbox — envelope and summary only.'
+                          : 'Read live from Zoho Mail.'}
+                      >
+                        {item.stored ? 'Saved in CRM' : 'Zoho Mail'}
                       </span>
 
                       {isFromLog && (
@@ -260,7 +296,7 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                       )}
 
                       <span className="text-[11px] font-bold text-[#161616]/60 truncate max-w-[240px]">
-                        {isIncoming ? `From: ${item.sender || leadEmail}` : `To: ${item.toAddress || leadEmail}`}
+                        {isIncoming ? `From: ${formatAddress(item.sender) || leadEmail}` : `To: ${formatAddress(item.toAddress) || leadEmail}`}
                       </span>
                     </div>
 
@@ -286,13 +322,13 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                             <div className="prose prose-sm max-w-none text-[#161616] leading-relaxed font-sans" dangerouslySetInnerHTML={{ __html: resolvedBody }} />
                           </div>
                         ) : (
-                          <div className="bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] p-4 text-xs font-mono text-[#161616] leading-relaxed whitespace-pre-wrap">
+                          <div className="bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] p-4 text-xs font-mono text-[#161616] leading-relaxed whitespace-pre-wrap max-h-[400px] overflow-y-auto">
                             {plainTextFull}
                           </div>
                         )}
                       </div>
                     ) : (
-                      <p className="text-xs text-[#161616]/80 leading-relaxed font-normal">
+                      <p className="text-xs text-[#161616]/80 leading-relaxed font-normal line-clamp-3">
                         {plainTextFull}
                       </p>
                     )}
@@ -374,11 +410,11 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
               <div className="px-6 py-4 bg-[#F9F9F9] border-b border-[#DFDFDF] grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs shrink-0">
                 <div>
                   <span className="text-[9px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-0.5">Sender (From)</span>
-                  <span className="font-semibold text-[#161616] text-xs">{selectedEmail.sender || (selectedEmail.direction === 'in' ? leadEmail : 'You')}</span>
+                  <span className="font-semibold text-[#161616] text-xs">{formatAddress(selectedEmail.sender) || (selectedEmail.direction === 'in' ? leadEmail : 'You')}</span>
                 </div>
                 <div>
                   <span className="text-[9px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-0.5">Recipient (To)</span>
-                  <span className="font-semibold text-[#161616] text-xs">{selectedEmail.toAddress || (selectedEmail.direction === 'out' ? leadEmail : 'You')}</span>
+                  <span className="font-semibold text-[#161616] text-xs">{formatAddress(selectedEmail.toAddress) || (selectedEmail.direction === 'out' ? leadEmail : 'You')}</span>
                 </div>
                 <div>
                   <span className="text-[9px] font-bold text-[#161616]/40 uppercase tracking-widest block mb-0.5">Timestamp</span>

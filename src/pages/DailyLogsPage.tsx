@@ -17,10 +17,15 @@ export const DailyLogsPage: React.FC = () => {
     if (!user) return;
     setIsLoading(true);
     try {
-      const [usersData, logsData] = await Promise.all([
-        api.users.getAll(),
-        api.logs.getByEntity('GLOBAL')
+      // One request, and only the entries this page renders. It used to pull
+      // every log row the CRM had ever written to show the daily summaries.
+      const got = await api.batch([
+        { key: 'users', action: 'getUsers' },
+        { key: 'logs', action: 'getLogs', payload: { logAction: 'DAILY_LOG' } },
       ]);
+      const usersData = got.get<Record<string, unknown>[]>('users', []).map(api.map.user);
+      const logsData = got.get<Record<string, unknown>[]>('logs', []).map(api.map.log);
+
       setAllUsers(usersData);
       setLogs(logsData);
 
