@@ -136,6 +136,8 @@ function hashPassword(password, salt, iterations) {
   return bytesToHex(bytes);
 }
 
+function newSalt_() { return newSalt(); }
+
 function newSalt() {
   return Utilities.getUuid().replace(/-/g, '');
 }
@@ -448,6 +450,33 @@ function login(payload, meta) {
 
     if (Number(user.FailedLoginCount || 0) > 0 || user.LockedUntil) {
       updateRecordRaw('Users', user.ID, { FailedLoginCount: 0, LockedUntil: '' });
+    }
+
+    // Re-hash at the CURRENT cost setting, now, while we still have the
+    // plaintext.
+    //
+    // Each hash stores the iteration count it was made with, so lowering
+    // PASSWORD_ITERATIONS does nothing for accounts hashed at the old cost —
+    // they keep paying it on every sign-in, forever. And the plaintext only
+    // exists for this instant, so this is the one moment it can be fixed
+    // without asking anyone to change their password.
+    //
+    // The user pays the old cost once more, then every later sign-in is fast.
+    var storedRounds = Number(user.PasswordIterations || 0);
+    var wantRounds = getPasswordIterations();
+    if (storedRounds && storedRounds !== wantRounds) {
+      try {
+        var newSalt = newSalt_();
+        updateRecordRaw('Users', user.ID, {
+          PasswordHash: hashPassword(password, newSalt, wantRounds),
+          PasswordSalt: newSalt,
+          PasswordIterations: wantRounds,
+          PasswordUpdatedAt: new Date().toISOString()
+        });
+      } catch (e) {
+        // Never fail a valid sign-in over an optimisation.
+        Logger.log('Could not re-hash password at the new cost: ' + e.message);
+      }
     }
 
     var session = createSession(user, meta);

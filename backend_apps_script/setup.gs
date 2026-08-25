@@ -60,6 +60,9 @@ var DATABASE_SCHEMA = {
     // [ADDED] follow-up completion tracking. Existing rows are treated as
     // 'Planned' by default, so no historical row needs to be written.
     'FollowUpStatus', 'FollowUpCompletedAt', 'FollowUpCompletedBy',
+    // [ADDED] why a follow-up was allowed to go stale. Written server-side
+    // only, so it cannot be forged or back-dated by a client.
+    'FollowUpDelayReason', 'FollowUpDelayReasonAt', 'FollowUpDelayReasonBy',
     // [ADDED] soft delete. The row NEVER moves and is never cleared — it is
     // flagged and hidden from normal reads. See DeletedLeads for the archive.
     'Deleted', 'DeletedAt', 'DeletedBy', 'DeleteReason',
@@ -121,7 +124,28 @@ var DATABASE_SCHEMA = {
   // MessageId is the dedupe key: re-syncing the same message never doubles it.
   'EmailLog': [
     'ID', 'MessageId', 'LeadId', 'LeadEmail', 'UserId', 'Direction',
-    'Subject', 'Summary', 'Sender', 'ToAddress', 'SentAt', 'SyncedAt'
+    'Subject', 'Summary', 'Sender', 'ToAddress', 'SentAt', 'SyncedAt',
+    // [ADDED] Zoho addresses a message body as folder + message, so without
+    // the folder the body cannot be fetched at all. The archive wrote this
+    // field and getEmailContent read it, but it was missing HERE — so the
+    // column never existed, appendRecordRaw dropped the value silently, and
+    // every attempt to open a full message came back empty. That is why
+    // EmailBodies stayed at zero rows.
+    'FolderId'
+  ],
+
+  // [ADDED] message bodies, deliberately in their OWN sheet.
+  //
+  // A body can be 45,000 characters. EmailLog is read in full on every lead
+  // page load to list the conversation, and Apps Script has no way to read
+  // part of a sheet — so keeping bodies alongside the envelopes would mean
+  // hauling megabytes across to render a list of subject lines, and would
+  // eventually fail outright with "Service Spreadsheets failed".
+  //
+  // Split, the list read stays small forever and a body is fetched only when
+  // somebody actually opens that message.
+  'EmailBodies': [
+    'ID', 'MessageId', 'Body', 'BodyComplete', 'StoredAt'
   ],
 
   // [ADDED] saved email drafts, per user per lead.
@@ -768,7 +792,36 @@ function selfCheck() {
     'linkZoho', 'unlinkZoho', 'getZohoEmails', 'sendZohoEmail', 'buildZohoAuthUrl',
     'setupCRMDatabase', 'migrateDatabase', 'bootstrapPasswords', 'preflightCheck',
     'setAuthEnforcement', 'generateTemporaryPassword',
-    'migrateLegacyPasswords', 'auditLegacyPasswordExposure'
+    'migrateLegacyPasswords', 'auditLegacyPasswordExposure',
+
+    // ---- functions added by the overhaul, one or more per FILE ----
+    //
+    // The list above predates most of this work, so it passed whether or not
+    // the newer code had been pasted — "all expected functions are defined"
+    // read as proof of a good paste while saying nothing about six files
+    // worth of changes. These are the newest function in each file, which is
+    // what actually detects a file that was missed or pasted stale.
+    //
+    // api.gs
+    'runBatch',
+    // controllers.gs
+    'rowsToRecords', 'getActivityFeed', 'explainFollowUpDelay',
+    'guardStaleReschedule', 'followUpOverdueHours', 'getTeamOverview',
+    'deleteLead', 'restoreLead', 'installRoleResolver', 'cachedSheetFileId',
+    // utils.gs
+    'isTrueFlag', 'toIsoTimestamp', 'getActionPolicy', 'filterWritableFields',
+    // auth.gs
+    'changePassword', 'getAuthEnforcement',
+    // ZohoMail.gs
+    'getStoredEmails', 'getEmailContent', 'findEmailLogRow', 'messageInvolves',
+    'storeMessageBody', 'readMessageBody', 'syncMailbox', 'getEmailAnalytics',
+    'getUnmatchedEmails', 'auditEmailLogAttribution', 'repairEmailLog',
+    // setup.gs
+    'getMainFolderId', 'buildNextSteps',
+    // scheduled mailbox sync
+    'syncMailboxForUser', 'syncAllMailboxes', 'syncAllMailboxesAction',
+    'installMailSyncTrigger', 'removeMailSyncTrigger', 'mailSyncStatus',
+    'readMailSyncState', 'writeMailSyncState', 'newSyncContext'
   ];
 
   var missingFns = [];
@@ -781,6 +834,50 @@ function selfCheck() {
   } else {
     okCount++;
     notes.push('All ' + required.length + ' expected functions are defined.');
+  }
+
+  // ---- 1b. table entries the newest work added ----
+  //
+  // The check above proves a function NAME exists. It says nothing about a
+  // file whose functions were EDITED rather than added — a stale ZohoMail.gs
+  // or utils.gs passes it unchanged, which is exactly how a partial paste
+  // slips through while the report reads "no problems found".
+  //
+  // These are entries in the lookup tables, one per file that carries them,
+  // so re-pasting is verified by content and not merely by name.
+  var tableChecks = [
+    ['ERROR_CODES.ZOHO_REAUTH_REQUIRED',
+     typeof ERROR_CODES !== 'undefined' && !!ERROR_CODES.ZOHO_REAUTH_REQUIRED, 'utils.gs'],
+    ['ERROR_CODES.FOLLOWUP_REASON_REQUIRED',
+     typeof ERROR_CODES !== 'undefined' && !!ERROR_CODES.FOLLOWUP_REASON_REQUIRED, 'utils.gs'],
+    ['ACTION_POLICY.explainFollowUpDelay',
+     typeof ACTION_POLICY !== 'undefined' && !!ACTION_POLICY.explainFollowUpDelay, 'utils.gs'],
+    ['ACTION_POLICY.getEmailContent',
+     typeof ACTION_POLICY !== 'undefined' && !!ACTION_POLICY.getEmailContent, 'utils.gs'],
+    ['BATCHABLE_ACTIONS',
+     typeof BATCHABLE_ACTIONS !== 'undefined' && BATCHABLE_ACTIONS.length > 0, 'api.gs'],
+    ['Leads.FollowUpDelayReason in schema',
+     typeof DATABASE_SCHEMA !== 'undefined' &&
+       DATABASE_SCHEMA.Leads.indexOf('FollowUpDelayReason') !== -1, 'setup.gs'],
+    ['EmailLog.FolderId in schema',
+     typeof DATABASE_SCHEMA !== 'undefined' &&
+       DATABASE_SCHEMA.EmailLog.indexOf('FolderId') !== -1, 'setup.gs'],
+    ['ACTION_POLICY.syncAllMailboxes',
+     typeof ACTION_POLICY !== 'undefined' && !!ACTION_POLICY.syncAllMailboxes, 'utils.gs']
+  ];
+
+  var staleFiles = [];
+  for (var t = 0; t < tableChecks.length; t++) {
+    if (!tableChecks[t][1]) {
+      staleFiles.push(tableChecks[t][0] + ' (missing — re-paste ' + tableChecks[t][2] + ')');
+    }
+  }
+  if (staleFiles.length) {
+    problems.push('A file was pasted from an older copy: ' + staleFiles.join('; '));
+  } else {
+    okCount++;
+    notes.push('All ' + tableChecks.length + ' expected table entries are present ' +
+               '— every file is current, not just named correctly.');
   }
 
   // ---- 2. script properties ----
@@ -1103,4 +1200,93 @@ function auditLegacyPasswordExposure() {
     Logger.log('Run migrateLegacyPasswords() to hash and remove them.');
   }
   return result;
+}
+
+/* ================================================================== *
+ * Scheduled mailbox sync
+ * ================================================================== */
+
+/** One trigger, identified by the function it runs. */
+var MAIL_SYNC_HANDLER = 'syncAllMailboxes';
+
+/**
+ * Install the hourly mailbox sync.
+ *
+ * Run this ONCE from the editor. Safe to run again — it removes any existing
+ * copy first, so repeated runs never stack up duplicate triggers quietly
+ * multiplying the quota spend.
+ *
+ * Hourly rather than every few minutes on purpose. Each run costs one Zoho
+ * listing per linked mailbox against a free-tier budget, and the bookmarks
+ * mean a run with no new mail is nearly free — but "nearly free" times 288
+ * runs a day is not.
+ */
+function installMailSyncTrigger() {
+  removeMailSyncTrigger();
+  ScriptApp.newTrigger(MAIL_SYNC_HANDLER).timeBased().everyHours(1).create();
+  Logger.log('Installed: ' + MAIL_SYNC_HANDLER + ' runs every hour.');
+  Logger.log('Remove it with removeMailSyncTrigger().');
+  return listMailSyncTriggers();
+}
+
+/** Remove the sync trigger. Mail still syncs when someone opens a lead. */
+function removeMailSyncTrigger() {
+  var all = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  for (var i = 0; i < all.length; i++) {
+    if (all[i].getHandlerFunction() === MAIL_SYNC_HANDLER) {
+      ScriptApp.deleteTrigger(all[i]);
+      removed++;
+    }
+  }
+  if (removed) Logger.log('Removed ' + removed + ' existing sync trigger(s).');
+  return removed;
+}
+
+/** What is currently scheduled — read-only. */
+function listMailSyncTriggers() {
+  var all = ScriptApp.getProjectTriggers();
+  var mine = [];
+  for (var i = 0; i < all.length; i++) {
+    if (all[i].getHandlerFunction() === MAIL_SYNC_HANDLER) {
+      mine.push({ id: all[i].getUniqueId(), handler: all[i].getHandlerFunction() });
+    }
+  }
+  Logger.log(mine.length
+    ? mine.length + ' mailbox-sync trigger(s) installed.'
+    : 'No mailbox-sync trigger installed. Run installMailSyncTrigger().');
+  return mine;
+}
+
+/**
+ * What the last sync did for each person, without running anything.
+ *
+ * Reads the bookmarks the sync leaves behind, so a mailbox that has quietly
+ * stopped working — a revoked Zoho token, most often — is visible here rather
+ * than only showing up as mail nobody notices is missing.
+ */
+function mailSyncStatus() {
+  var users = getRecordsRaw('Users');
+  var rows = [];
+
+  for (var i = 0; i < users.length; i++) {
+    var u = users[i];
+    if (String(u.Status || '') !== 'Active') continue;
+    if (!String(u.ZohoRefreshToken || '')) {
+      rows.push({ username: String(u.Username || ''), state: 'no mailbox linked' });
+      continue;
+    }
+    var s = readMailSyncState(String(u.ID));
+    rows.push({
+      username: String(u.Username || ''),
+      lastSyncAt: s.lastSyncAt || 'never',
+      problem: s.lastError || ''
+    });
+  }
+
+  Logger.log('MAILBOX SYNC STATUS');
+  for (var r = 0; r < rows.length; r++) {
+    Logger.log('  ' + JSON.stringify(rows[r]));
+  }
+  return rows;
 }

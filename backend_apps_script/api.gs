@@ -313,6 +313,9 @@ function dispatch(action, payload, actor, e, body) {
     case 'cancelFollowUp':
       return cancelFollowUp(actor, payload);
 
+    case 'explainFollowUpDelay':
+      return explainFollowUpDelay(actor, payload);
+
     case 'convertLead':
       return convertLead(actor, payload);
 
@@ -424,6 +427,9 @@ function dispatch(action, payload, actor, e, body) {
     case 'getStoredEmails':
       return getStoredEmails(actor, payload);
 
+    case 'getEmailContent':
+      return getEmailContent(actor, payload);
+
     case 'saveEmailDraft':
       return saveEmailDraft(actor, payload);
 
@@ -435,6 +441,9 @@ function dispatch(action, payload, actor, e, body) {
 
     case 'syncMailbox':
       return syncMailbox(actor, payload);
+
+    case 'syncAllMailboxes':
+      return syncAllMailboxesAction(actor, payload);
 
     case 'getEmailAnalytics':
       return getEmailAnalytics(actor, payload);
@@ -492,6 +501,11 @@ function updateEntity(sheetName, payload, actor, action, validator, transitionCh
       if (!verdict.allowed) throw new ApiError('ILLEGAL_TRANSITION', verdict.reason);
     }
 
+    // Moving a long-overdue follow-up date requires saying why. May add the
+    // explanation to the patch, so it runs before `before` is captured.
+    var explainedDelay = sheetName === 'Leads' &&
+      guardStaleReschedule(existing, patch, payload, actor);
+
     var before = {};
     for (var k in patch) {
       if (Object.prototype.hasOwnProperty.call(patch, k)) before[k] = existing[k];
@@ -519,9 +533,13 @@ function updateEntity(sheetName, payload, actor, action, validator, transitionCh
     // second STATUS_CHANGE of its own, which produced two rows for one edit.
     var isStatusChange = patch.Status !== undefined && patch.Status !== before.Status;
 
-    var action2 = isStatusChange ? 'STATUS_CHANGE'
-                : isResearch     ? 'RESEARCH_UPDATED'
-                                 : 'UPDATED';
+    // A rescheduled stale follow-up is filed under its own action so managers
+    // can find every slip and its stated reason, rather than reading them out
+    // of generic UPDATED rows.
+    var action2 = isStatusChange  ? 'STATUS_CHANGE'
+                : explainedDelay  ? 'FOLLOWUP_DELAYED'
+                : isResearch      ? 'RESEARCH_UPDATED'
+                                  : 'UPDATED';
 
     auditLog({
       entityId: id, entityType: singular(sheetName),
@@ -529,6 +547,9 @@ function updateEntity(sheetName, payload, actor, action, validator, transitionCh
       userId: actor ? actor.ID : 'ANONYMOUS',
       details: isStatusChange
         ? 'Status changed from ' + (before.Status || 'none') + ' to ' + patch.Status + '.'
+        : explainedDelay
+        ? 'Follow-up moved from ' + (before.NextFollowUp || 'none') + ' to ' +
+          patch.NextFollowUp + ': ' + patch.FollowUpDelayReason
         : isResearch
         ? 'Research and qualification notes updated.'
         : singular(sheetName) + ' updated: ' + Object.keys(patch).join(', ') + '.',

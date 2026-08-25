@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/services';
+import { ApiError } from '../api/errors';
 import { Lead, Log, AdminRequest, User, ZohoEmailItem } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { 
@@ -14,6 +15,7 @@ import { EmailComposer } from '../components/zoho/EmailComposer';
 import { EditLeadModal } from '../components/leads/EditLeadModal';
 import { DeleteLeadModal } from '../components/leads/DeleteLeadModal';
 import { FollowUpPanel } from '../components/leads/FollowUpPanel';
+import { FollowUpDelayPrompt } from '../components/leads/FollowUpDelayPrompt';
 import { InteractionComposer } from '../components/leads/InteractionComposer';
 import { ResearchPanel } from '../components/leads/ResearchPanel';
 
@@ -57,10 +59,21 @@ export const LeadDetail: React.FC = () => {
   // Zoho Mail States
   const [zohoEmails, setZohoEmails] = useState<ZohoEmailItem[]>([]);
   const [isZohoLinked, setIsZohoLinked] = useState(false);
+  /** Set when Zoho refuses the stored token: actionable, and not self-healing. */
+  const [zohoExpired, setZohoExpired] = useState<string | null>(null);
+  /** Why the lead could not be read — as opposed to the lead not existing. */
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isFetchingZoho, setIsFetchingZoho] = useState(false);
   const [showMandatoryFollowUpPrompt, setShowMandatoryFollowUpPrompt] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
+  /**
+   * Set when the server refuses to move a stale follow-up without a reason.
+   * Holds the date that was being set, so answering the prompt completes the
+   * original action rather than making the user pick the date again.
+   */
+  const [delayPrompt, setDelayPrompt] =
+    useState<{ date: string; message: string; error?: string } | null>(null);
   const isManager = role === 'SUPER_ADMIN' || role === 'ADMIN';
 
   /**
@@ -91,11 +104,18 @@ export const LeadDetail: React.FC = () => {
       const live = await api.zoho.getEmails(targetLead.email, targetLead.id);
       const merged = mergeEmails(stored, live);
       setZohoEmails(merged);
+      setZohoExpired(null);
       return merged;
     } catch (err) {
-      // A mailbox that cannot be reached is not an error the user can act on
-      // — they still have the archived conversation in front of them.
-      console.error('Could not sync from Zoho:', err);
+      // An expired connection IS something they can act on, and it will not
+      // fix itself — so it gets said plainly instead of being swallowed into
+      // the console. Anything else (a transient Zoho blip, a network drop) is
+      // not actionable: the archived conversation is still on screen.
+      if (err instanceof ApiError && err.code === 'ZOHO_REAUTH_REQUIRED') {
+        setZohoExpired(err.displayMessage);
+      } else {
+        console.error('Could not sync from Zoho:', err);
+      }
       return stored;
     }
   }, []);
@@ -165,7 +185,15 @@ export const LeadDetail: React.FC = () => {
           { key: 'stored', action: 'getStoredEmails', payload: { leadId: id } },
         ]);
 
-        const leadData = got.failed('lead')
+        // "The request failed" and "the record is gone" are different facts and
+        // must not render as the same sentence. A failed read left `lead` null,
+        // and the page then announced the lead had been DELETED — about a lead
+        // sitting untouched in the sheet. Keep the reason so the page can tell
+        // the truth and offer a retry.
+        const leadFailed = got.failed('lead');
+        setLoadError(leadFailed ? (got.errorFor('lead') || 'The server did not answer.') : null);
+
+        const leadData = leadFailed
           ? undefined
           : api.map.lead(got.get<Record<string, unknown>>('lead', {}));
         const logsData = got.get<Record<string, unknown>[]>('logs', []).map(api.map.log);
@@ -250,19 +278,40 @@ export const LeadDetail: React.FC = () => {
     return d.toISOString().split('T')[0];
   })();
 
+  /**
+   * Move the follow-up date, asking why if it has been ignored for a day.
+   *
+   * The server is the one that decides an explanation is owed — the same rule
+   * has to hold whoever is calling — so this reacts to its refusal rather than
+   * trying to work out staleness a second time on the client and risking the
+   * two disagreeing.
+   */
+  const saveFollowUpDate = async (dateStr: string, delayReason?: string) => {
+    if (!id) return;
+    try {
+      // The backend audits this update; a second log here would double it.
+      await api.leads.update(id, { nextFollowUp: dateStr }, { delayReason });
+      setLead(prev => (prev ? {
+        ...prev,
+        nextFollowUp: dateStr,
+        ...(delayReason ? { followUpDelayReason: delayReason } : {}),
+      } : null));
+      setDelayPrompt(null);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'FOLLOWUP_REASON_REQUIRED') {
+        setDelayPrompt({ date: dateStr, message: err.message });
+        return;
+      }
+      console.error('Failed to update follow up date:', err);
+      setDelayPrompt(prev => (prev ? { ...prev, error: 'That did not save. Try again.' } : null));
+    }
+  };
+
   const handleSetFollowUpDays = async (days: number) => {
     if (!id || !user || !lead) return;
     const target = new Date();
     target.setDate(target.getDate() + days);
-    const dateStr = target.toISOString().split('T')[0];
-    
-    try {
-      // The backend audits this update; a second log here would double it.
-      await api.leads.update(id, { nextFollowUp: dateStr });
-      setLead(prev => prev ? { ...prev, nextFollowUp: dateStr } : null);
-    } catch (err) {
-      console.error('Failed to update follow up date:', err);
-    }
+    await saveFollowUpDate(target.toISOString().split('T')[0]);
   };
 
   const handleCustomFollowUpDate = async (selectedDateStr: string) => {
@@ -273,14 +322,7 @@ export const LeadDetail: React.FC = () => {
       alert(`Follow-up date cannot be more than 3 days into the future. Auto-adjusting to max allowed (${maxFollowUpDateStr}).`);
       finalDateStr = maxFollowUpDateStr;
     }
-    
-    try {
-      // The backend audits this update; a second log here would double it.
-      await api.leads.update(id, { nextFollowUp: finalDateStr });
-      setLead(prev => prev ? { ...prev, nextFollowUp: finalDateStr } : null);
-    } catch (err) {
-      console.error('Failed to update follow up date:', err);
-    }
+    await saveFollowUpDate(finalDateStr);
   };
 
   useEffect(() => {
@@ -388,6 +430,32 @@ export const LeadDetail: React.FC = () => {
     </div>
   );
   
+  // A read that failed is NOT a lead that was deleted. Saying so sends people
+  // looking for a record that is sitting exactly where they left it.
+  if (!lead && loadError) return (
+    <div className="bg-white border border-amber-300 rounded-[6px] p-12 text-center shadow-sm">
+      <p className="font-bold text-[#161616]/70">This lead could not be loaded.</p>
+      <p className="text-[11px] text-[#161616]/50 mt-2 max-w-[420px] mx-auto leading-relaxed">
+        {loadError} The lead itself is fine — this is a problem reaching the
+        server, which on the free tier is usually momentary.
+      </p>
+      <div className="flex items-center justify-center gap-3 mt-5">
+        <button
+          onClick={fetchData}
+          className="px-4 py-2 bg-[#161616] text-white rounded-[4px] text-[11px] font-bold uppercase tracking-widest"
+        >
+          Try again
+        </button>
+        <button
+          onClick={() => navigate('/leads')}
+          className="px-4 py-2 text-[11px] font-bold uppercase tracking-widest text-[#161616]/50 hover:text-[#161616]"
+        >
+          Back to leads
+        </button>
+      </div>
+    </div>
+  );
+
   if (!lead) return (
     <div className="bg-white border border-[#DFDFDF] rounded-[6px] p-12 text-center shadow-sm">
       <p className="font-bold text-[#161616]/60">Lead not found or has been deleted.</p>
@@ -405,24 +473,25 @@ export const LeadDetail: React.FC = () => {
           <ArrowLeft className="w-4 h-4" /> Back to Leads
         </button>
         <div className="flex gap-2">
-          {/* Editing a lead's identity and deleting it are both manager
-              actions. The server enforces this independently — hiding the
-              buttons is convenience, not the control. */}
+          {/* Editing is open to anyone who can see the lead: the person who
+              finds a wrong address is whoever is working it, and every change
+              is audited with its previous value. DELETING stays with managers,
+              because that is the part that cannot be undone by reading the
+              history back. The server enforces both independently — showing or
+              hiding a button is convenience, not the control. */}
+          <button
+            onClick={() => setShowEdit(true)}
+            className="flex items-center gap-2 border border-[#DFDFDF] text-[#161616]/60 px-4 py-2 rounded-[6px] text-xs font-bold hover:border-[#161616]/40 transition-all"
+          >
+            <Pencil className="w-3.5 h-3.5" /> EDIT LEAD
+          </button>
           {isManager && (
-            <>
-              <button
-                onClick={() => setShowEdit(true)}
-                className="flex items-center gap-2 border border-[#DFDFDF] text-[#161616]/60 px-4 py-2 rounded-[6px] text-xs font-bold hover:border-[#161616]/40 transition-all"
-              >
-                <Pencil className="w-3.5 h-3.5" /> EDIT LEAD
-              </button>
-              <button
-                onClick={() => setShowDelete(true)}
-                className="flex items-center gap-2 border border-red-200 text-red-600 px-4 py-2 rounded-[6px] text-xs font-bold hover:bg-red-50 transition-all"
-              >
-                <Trash2 className="w-3.5 h-3.5" /> DELETE
-              </button>
-            </>
+            <button
+              onClick={() => setShowDelete(true)}
+              className="flex items-center gap-2 border border-red-200 text-red-600 px-4 py-2 rounded-[6px] text-xs font-bold hover:bg-red-50 transition-all"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> DELETE
+            </button>
           )}
           <button
             disabled={lead.status === 'Converted'}
@@ -790,25 +859,64 @@ export const LeadDetail: React.FC = () => {
               // to reconnect a working account because the LEAD happened to
               // have no email address.
               <div className="flex flex-col gap-6">
-                {!isZohoLinked ? (
-                  <div className="flex flex-col items-center justify-center py-20 text-center gap-4 bg-[#F9F9F9] border border-dashed border-[#DFDFDF] rounded-[8px] px-6">
-                    <Mail className="w-10 h-10 text-[#161616]/20" />
-                    <div>
-                      <h4 className="text-xs font-bold text-[#161616] uppercase tracking-widest mb-1.5">Your Zoho Mail is not linked</h4>
-                      <p className="text-[11px] text-[#161616]/40 max-w-[300px] leading-relaxed mx-auto">
-                        Connect your own Zoho Business Mail account from the Dashboard
-                        to read and send email here. Each person links their own mailbox.
+                {/*
+                  A refresh token exists, so the account reads as "linked" —
+                  Zoho simply no longer honours it. Saying "not linked" would
+                  send someone to check a setting that looks correct. Shown
+                  ABOVE the viewer rather than instead of it, because the
+                  archived conversation is still perfectly readable.
+                */}
+                {zohoExpired && (
+                  <div className="flex items-start gap-3 bg-amber-50 border border-amber-300 rounded-[8px] px-4 py-3">
+                    <Mail className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <h4 className="text-[10px] font-black text-amber-800 uppercase tracking-widest mb-1">
+                        Zoho Mail connection expired
+                      </h4>
+                      <p className="text-[11px] text-[#161616]/60 leading-relaxed">
+                        {zohoExpired} Mail already archived in the CRM is still shown
+                        below; new mail will not appear until you reconnect from the
+                        Dashboard.
                       </p>
                     </div>
                   </div>
-                ) : !looksLikeEmail(lead.email) ? (
+                )}
+
+                {/*
+                  Not having YOUR OWN mailbox linked does not make the lead's
+                  correspondence invisible: the archive belongs to the lead, not
+                  to a mailbox, and a manager reviewing a rep's lead has every
+                  right to read it.
+
+                  This used to replace the viewer entirely, so an Admin who had
+                  never linked Zoho saw an empty tab on a lead with a full
+                  history — the mail was in the CRM the whole time. It is a
+                  notice now, not a wall.
+                */}
+                {!isZohoLinked && (
+                  <div className="flex items-start gap-3 bg-[#F9F9F9] border border-dashed border-[#DFDFDF] rounded-[8px] px-4 py-3">
+                    <Mail className="w-4 h-4 text-[#161616]/30 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <h4 className="text-[10px] font-black text-[#161616]/70 uppercase tracking-widest mb-1">
+                        Your Zoho Mail is not linked
+                      </h4>
+                      <p className="text-[11px] text-[#161616]/50 leading-relaxed">
+                        Mail already archived in the CRM is shown below. Connect your
+                        own Zoho Business Mail from the Dashboard to send from here and
+                        to pull in new messages. Each person links their own mailbox.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {!looksLikeEmail(lead.email) ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center gap-4 bg-[#F9F9F9] border border-dashed border-[#DFDFDF] rounded-[8px] px-6">
                     <Mail className="w-10 h-10 text-[#161616]/20" />
                     <div>
                       <h4 className="text-xs font-bold text-[#161616] uppercase tracking-widest mb-1.5">This lead has no email address</h4>
                       <p className="text-[11px] text-[#161616]/40 max-w-[300px] leading-relaxed mx-auto">
-                        Your mailbox is connected — there is simply no address on
-                        this record to hold a conversation with.
+                        There is no address on this record to hold a conversation
+                        with.
                         {lead.email ? ` The contact field currently reads "${lead.email}".` : ''}
                         {isManager ? ' Add one with Edit Lead.' : ''}
                       </p>
@@ -817,6 +925,7 @@ export const LeadDetail: React.FC = () => {
                 ) : (
                   <ZohoEmailViewer
                     emails={zohoEmails}
+                    leadId={lead.id}
                     leadEmail={lead.email}
                     leadName={lead.name}
                     crmLogs={logs}
@@ -884,6 +993,19 @@ export const LeadDetail: React.FC = () => {
           // The lead is no longer visible in the CRM, so there is nothing left
           // to show on this page — go back to the list.
           onDeleted={() => navigate('/leads')}
+        />
+      )}
+
+      {/*
+        Asked for only when the server says one is owed: the follow-up has been
+        overdue for more than a day and the date is being pushed out.
+      */}
+      {delayPrompt && (
+        <FollowUpDelayPrompt
+          message={delayPrompt.message}
+          error={delayPrompt.error}
+          onCancel={() => setDelayPrompt(null)}
+          onSubmit={(reason) => saveFollowUpDate(delayPrompt.date, reason)}
         />
       )}
     </div>

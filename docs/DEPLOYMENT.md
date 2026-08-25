@@ -129,11 +129,12 @@ insert in the middle.** An `ID` column must exist in every managed sheet; its
 | `Projects` | `DealId`, `Notes` |
 | `AdminRequests` | `Notes`, `PaymentLink`, `DocumentUrl` |
 | `Commissions` | `PayoutDate` |
-| `Leads` | `FollowUpStatus`, `FollowUpCompletedAt`, `FollowUpCompletedBy`, `Deleted`, `DeletedAt`, `DeletedBy`, `DeleteReason`, `ResearchFindings`, `QualificationReason`, `ResearchSource`, `ResearchUpdatedAt`, `ResearchUpdatedBy` |
+| `Leads` | `FollowUpStatus`, `FollowUpCompletedAt`, `FollowUpCompletedBy`, `FollowUpDelayReason`, `FollowUpDelayReasonAt`, `FollowUpDelayReasonBy`, `Deleted`, `DeletedAt`, `DeletedBy`, `DeleteReason`, `ResearchFindings`, `QualificationReason`, `ResearchSource`, `ResearchUpdatedAt`, `ResearchUpdatedBy` |
 | `Logs` | `RequestId`, `ContactMode` |
 | **`Sessions`** | **new sheet:** `ID`, `TokenHash`, `UserId`, `CreatedAt`, `ExpiresAt`, `RevokedAt`, `UserAgent` |
 | **`DeletedLeads`** | **new sheet:** `ID`, `LeadId`, `LeadName`, `DeletedAt`, `DeletedBy`, `DeletedByUsername`, `Reason`, `Snapshot`, `RestoredAt`, `RestoredBy` |
-| **`EmailLog`** | **new sheet:** `ID`, `MessageId`, `LeadId`, `LeadEmail`, `UserId`, `Direction`, `Subject`, `Summary`, `Sender`, `ToAddress`, `SentAt`, `SyncedAt` |
+| **`EmailLog`** | **new sheet:** `ID`, `MessageId`, `LeadId`, `LeadEmail`, `UserId`, `Direction`, `Subject`, `Summary`, `Sender`, `ToAddress`, `SentAt`, `SyncedAt`, `FolderId` |
+| **`EmailBodies`** | **new sheet:** `ID`, `MessageId`, `Body`, `BodyComplete`, `StoredAt` — message text, kept apart from `EmailLog` so listing a conversation never reads it |
 | **`EmailDrafts`** | **new sheet:** `ID`, `LeadId`, `UserId`, `ToAddress`, `Subject`, `Content`, `CreatedAt`, `UpdatedAt`, `SentAt` |
 
 `Deals` is unchanged.
@@ -166,6 +167,73 @@ Both are writable by whoever works the lead, not just managers: the person
 doing the research is usually the rep. `ResearchUpdatedAt` and
 `ResearchUpdatedBy` are stamped server-side and cannot be set by the client.
 
+### Stale follow-ups have to be explained
+
+`FollowUpDelayReason`, `FollowUpDelayReasonAt` and `FollowUpDelayReasonBy`
+record why a follow-up was left outstanding.
+
+Moving the date is the one edit that makes a missed follow-up stop looking
+missed: the lead drops off the overdue list and nothing records that it was
+ever late. So once a follow-up has been overdue for **more than 24 hours**,
+changing its date is refused (`FOLLOWUP_REASON_REQUIRED`) until the person
+gives a one-line reason. The CRM prompts for it; they are not expected to know
+the rule.
+
+What this does **not** block: notes, status, research, completing the
+follow-up, or rescheduling one that is merely late rather than a full day
+stale. Normal day-to-day work is untouched.
+
+The reason can also be given on its own, without moving the date, via
+`explainFollowUpDelay`. Either way the author and the time are stamped
+server-side — the three columns are **not** client-writable, so an explanation
+cannot be attributed to somebody else or backdated onto a lapse it was not
+about. Each one is filed under its own `FOLLOWUP_DELAYED` audit action, so a
+manager can list every slip and its stated reason rather than reading them out
+of generic `UPDATED` rows.
+
+### The scheduled mailbox sync
+
+A request only ever reads the **caller's own** mailbox — that is what stops one
+person reading a colleague's inbox. The consequence was that mail somebody sent
+from their own Zoho account never reached the CRM unless they personally opened
+that lead. A manager reviewing the lead saw a conversation with pieces missing
+and no indication anything was missing.
+
+`syncAllMailboxes()` closes that. Running as a **time-driven trigger** it is the
+script acting as itself rather than on behalf of a user, so reading every linked
+mailbox is legitimate. Install it once, from the editor:
+
+```
+installMailSyncTrigger()     // hourly; safe to re-run, replaces any existing one
+listMailSyncTriggers()       // what is scheduled right now
+mailSyncStatus()             // when each mailbox last synced, and what broke
+removeMailSyncTrigger()      // stop it
+```
+
+**Nothing about who may READ mail changes.** `getStoredEmails` still scopes by
+which leads you may see: a Super Admin sees every lead's correspondence, an
+Admin their team's, a rep their own — including the mail they sent themselves.
+The trigger only fills the shared archive.
+
+A Super Admin can also run it on demand via the `syncAllMailboxes` action. It
+returns counts only, never message contents, so it fills the archive rather than
+exposing a colleague's mail.
+
+**It is incremental.** Each mailbox keeps a bookmark in Script Properties
+(`MAILSYNC_<userId>`) holding the newest message id it has seen. If nothing has
+arrived, the run costs one Zoho listing and writes nothing at all; otherwise it
+walks newest-first and stops at the first message already archived. Bookmarks
+live in Script Properties rather than a `Users` column deliberately — this is
+bookkeeping about the sync process, not CRM data, so it needs no migration.
+
+One broken mailbox never stops the rest: a revoked token is recorded against
+that user (visible in `mailSyncStatus()`) and the loop continues. The run also
+stops itself before Apps Script's six-minute limit; whatever is left is picked
+up on the next tick, and the bookmarks mean nothing is redone.
+
+Hourly, not every few minutes: each run costs one Zoho listing per linked
+mailbox against a free-tier budget.
+
 ### Why email is copied into the CRM
 
 `EmailLog` holds the envelope of every message exchanged with a lead —
@@ -181,6 +249,27 @@ never doubles the thread, and only genuinely new messages cost a write.
 `EmailDrafts` holds half-written replies. They live in the CRM rather than
 Zoho's drafts folder so they sit next to the lead they belong to and survive a
 browser refresh. A draft is private to its author, even from a Super Admin.
+
+### Repairing wrongly-filed email
+
+An earlier version trusted Zoho's search to filter by address. It does not:
+an unrecognised search key returns the **whole mailbox**, so unrelated
+messages were archived against leads they had nothing to do with — shown on
+the lead page marked "SAVED IN CRM" as though verified.
+
+Both the live read and the archive read now verify that the lead's own
+address is actually on the message, so bad rows stop appearing immediately
+after deploying. To clean them up:
+
+```
+auditEmailLogAttribution()   // reports only, changes nothing
+repairEmailLog()             // detaches the rows it listed
+```
+
+`repairEmailLog()` clears `LeadId`. It **never deletes a message** — the mail
+is real, it simply does not belong to that company. Detached rows appear under
+"no matching lead" in Insights, where they can be looked at rather than
+silently discarded.
 
 ### How lead deletion stores data
 

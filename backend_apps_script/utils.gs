@@ -251,6 +251,7 @@ var ACTION_POLICY = {
   /* --- follow-ups --- */
   'completeFollowUp': { roles: STAFF,    scope: { SUPER_ADMIN: 'all', ADMIN: 'team', SALES_REP: 'own', SETTER: 'own' } },
   'cancelFollowUp':   { roles: STAFF,    scope: { SUPER_ADMIN: 'all', ADMIN: 'team', SALES_REP: 'own', SETTER: 'own' } },
+  'explainFollowUpDelay': { roles: STAFF, scope: { SUPER_ADMIN: 'all', ADMIN: 'team', SALES_REP: 'own', SETTER: 'own' } },
 
   /* --- assignment (manual, managers only) --- */
   'assignCloser':     { roles: MANAGERS },
@@ -315,6 +316,8 @@ var ACTION_POLICY = {
   // Stored correspondence, readable without a live Zoho connection. Scoped
   // by the lead, so it follows the same visibility rules as the lead itself.
   'getStoredEmails':  { roles: ALL_ROLES },
+  // Full body of one message, fetched only when someone opens it.
+  'getEmailContent':  { roles: ALL_ROLES },
   'saveEmailDraft':   { roles: ALL_ROLES },
   'getEmailDrafts':   { roles: ALL_ROLES },
   'deleteEmailDraft': { roles: ALL_ROLES },
@@ -322,6 +325,10 @@ var ACTION_POLICY = {
   // how far the results reach, which the handlers decide — a rep sees their
   // own figures, a manager their team's, a Super Admin the organisation's.
   'syncMailbox':        { roles: ALL_ROLES },
+  // Reads EVERY mailbox, so Super Admin only. It returns counts, never message
+  // contents — it fills the shared archive, it is not a way to read a
+  // colleague's mail.
+  'syncAllMailboxes':   { roles: ['SUPER_ADMIN'] },
   'getEmailAnalytics':  { roles: ALL_ROLES },
   'getUnmatchedEmails': { roles: ALL_ROLES },
   'getZohoAuthUrl':   { roles: ALL_ROLES },
@@ -514,7 +521,18 @@ var WRITABLE_FIELDS = {
  * stop a rep from being able to work their own pipeline.
  */
 var MANAGER_ONLY_FIELDS = {
-  Leads: ['Name', 'Email', 'Phone', 'Linkedin']
+  // Deliberately empty for Leads.
+  //
+  // Name / Email / Phone / Linkedin used to be manager-only, on the reasoning
+  // that a lead's identity is shared state and a mistyped company name cannot
+  // be reconstructed later. In practice the person who finds the wrong address
+  // is the rep working the lead, and making them ask a manager to correct a
+  // typo means the record just stays wrong.
+  //
+  // DELETION is the irreversible act, and that remains SUPER_ADMIN and ADMIN
+  // only — see ACTION_POLICY.deleteLead. Editing is recoverable: every change
+  // is audited with before/after values.
+  Leads: []
 };
 
 function isManagerRole(role) {
@@ -903,6 +921,15 @@ var ERROR_CODES = {
   PASSWORD_NOT_SET:  { http: 403, retryable: false },
   NOT_FOUND:         { http: 404, retryable: false },
   VALIDATION_FAILED: { http: 400, retryable: false },
+  // Not a validation failure: the request is well formed, the caller simply
+  // owes an explanation first. Its own code so the UI can open the prompt
+  // instead of showing a field error on a field that does not exist yet.
+  FOLLOWUP_REASON_REQUIRED: { http: 400, retryable: false },
+  // The stored Zoho refresh token is no longer accepted. Distinct from
+  // EXTERNAL_ERROR because it is PERMANENT until the person reconnects: a
+  // client that cannot tell the difference re-attempts it on every lead,
+  // paying a full round trip each time for a call that cannot succeed.
+  ZOHO_REAUTH_REQUIRED: { http: 401, retryable: false },
   ILLEGAL_TRANSITION:{ http: 409, retryable: false },
   CONFLICT:          { http: 409, retryable: false },
   DUPLICATE:         { http: 409, retryable: false },

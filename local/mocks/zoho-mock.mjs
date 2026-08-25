@@ -8,7 +8,20 @@
  * Every mailbox is keyed by refresh token, which is what makes cross-account
  * isolation testable: if the backend ever uses the wrong token, the mock
  * returns the wrong mailbox and the isolation test fails loudly.
+ *
+ * A mock that is MORE PERMISSIVE than the real service is worse than no mock,
+ * because it turns a production bug into a passing test. This one has been
+ * wrong that way four times: it accepted mixed argument types where
+ * Utilities.computeHmacSha256Signature does not, it returned booleans where
+ * Sheets coerces them to strings, it returned an empty list for an
+ * unrecognised search key where Zoho returns the whole mailbox, and it served
+ * every message regardless of folder where Zoho serves only the Inbox. Each
+ * time, the fix was to make the MOCK stricter first and watch the test fail.
  */
+
+/** Folder ids, matching the shape Zoho returns from /folders. */
+const FOLDER_INBOX = '1';
+const FOLDER_SENT = '2';
 
 export function createZohoMock(opts = {}) {
   const state = {
@@ -28,6 +41,10 @@ export function createZohoMock(opts = {}) {
       refresh: null,
       accounts: null,
       search: null,
+      // A token issued before ZohoMail.folders.READ was requested can read
+      // messages but answers 401 to a folder listing. That is the live state
+      // of every mailbox connected before this scope existed.
+      folders: null,
       content: null,
       send: null,
       rateLimit: false,
@@ -196,16 +213,23 @@ export function createZohoMock(opts = {}) {
       const box = state.mailboxes.get(acct.accountId) || { messages: [] };
       let out = box.messages;
       const to = key.match(/^to:(.*)$/);
-      // Zoho documents `from:`; older endpoints answer to `sender:`. The mock
-      // honours ONLY `from:` so the backend cannot quietly depend on a key
-      // the live service might ignore — the failure mode that hid every
-      // inbound reply was an unrecognised key returning an empty list.
       const from = key.match(/^from:(.*)$/);
-      const legacySender = key.match(/^sender:(.*)$/);
 
-      if (to) out = out.filter((m) => (m.toAddress || '').includes(to[1]));
-      else if (from) out = out.filter((m) => (m.sender || '').includes(from[1]));
-      else if (legacySender) out = [];   // unrecognised key: empty, not an error
+      if (to) {
+        out = out.filter((m) => (m.toAddress || '').includes(to[1]));
+      } else if (from) {
+        out = out.filter((m) => (m.sender || '').includes(from[1]));
+      } else {
+        // AN UNRECOGNISED KEY RETURNS THE WHOLE MAILBOX.
+        //
+        // This is what the live service actually does, and it is far more
+        // dangerous than returning nothing: a lead with no correspondence was
+        // shown ten unrelated messages, including private threads between
+        // colleagues. The mock previously returned [] here, which made the
+        // backend look correct while it was leaking other people's mail onto
+        // a lead page.
+        out = box.messages;
+      }
       return resp(200, { status: { code: 200 }, data: out.map(stripContent) });
     }
 
@@ -221,12 +245,47 @@ export function createZohoMock(opts = {}) {
       const qs = new URLSearchParams(viewMatch[2]);
       const limit = Number(qs.get('limit') || 50);
       const box = state.mailboxes.get(acct.accountId) || { messages: [] };
-      const ordered = [...box.messages].sort(
+
+      // A listing is ALWAYS scoped to one folder, and with no folderId Zoho
+      // gives you the Inbox — it does not give you the whole mailbox.
+      //
+      // This mock used to return everything regardless of folder, which is
+      // strictly more generous than the real API. A sync that only ever asked
+      // for the default listing therefore looked like it collected sent mail
+      // in tests, and collected none of it in production: 50 messages
+      // archived, every one inbound, nothing matched to a lead.
+      const wanted = qs.get('folderId') || FOLDER_INBOX;
+      const inFolder = box.messages.filter(
+        (m) => String(m.folderId || FOLDER_INBOX) === String(wanted)
+      );
+
+      const ordered = inFolder.sort(
         (a, b) => Number(b.receivedTime || 0) - Number(a.receivedTime || 0)
       );
       return resp(200, {
         status: { code: 200 },
         data: ordered.slice(0, limit).map(stripContent),
+      });
+    }
+
+    /* ---- folder listing ---- */
+    const foldersMatch = u.match(/^https:\/\/mail\.zoho\.in\/api\/accounts\/([^/]+)\/folders$/);
+    if (foldersMatch) {
+      if (state.faults.folders) return state.faults.folders;
+      const acct = accountFromRequest(params);
+      if (!acct) return resp(401, { status: { code: 401, description: 'Invalid OAuth token' } });
+      if (foldersMatch[1] !== acct.accountId) {
+        return resp(403, { status: { code: 403, description: 'Forbidden account access' } });
+      }
+      return resp(200, {
+        status: { code: 200 },
+        data: [
+          { folderId: FOLDER_INBOX, folderName: 'Inbox', folderType: 'Inbox' },
+          { folderId: FOLDER_SENT, folderName: 'Sent', folderType: 'Sent' },
+          { folderId: '3', folderName: 'Drafts', folderType: 'Drafts' },
+          { folderId: '4', folderName: 'Trash', folderType: 'Trash' },
+          { folderId: '5', folderName: 'Spam', folderType: 'Spam' },
+        ],
       });
     }
 
@@ -322,7 +381,7 @@ export function createZohoMock(opts = {}) {
     clearFaults: () => {
       state.faults = {
         tokenExchange: null, refresh: null, accounts: null,
-        search: null, content: null, send: null, attachment: null,
+        search: null, folders: null, content: null, send: null, attachment: null,
         rateLimit: false,
       };
     },

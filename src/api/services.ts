@@ -29,11 +29,50 @@ interface ApiEnvelope<T> {
   requestId?: string;
 }
 
-async function fetchAPI<T = SheetRow>(
+/**
+ * Reads that are safe to send again if a response is lost in transit.
+ *
+ * Deliberately not "anything that failed": a write whose response never
+ * arrived may well have been applied, so retrying `createLead` risks a second
+ * lead, a second commission, a second payout. Everything admitted here only
+ * reads.
+ */
+function isSafeToRetry(action: string): boolean {
+  return action === 'batch' || /^get/.test(action);
+}
+
+/**
+ * Whether this user's Zoho mailbox needs reconnecting.
+ *
+ * Latched for the session once the backend reports it, and cleared the moment
+ * they link the mailbox again. Deliberately in memory rather than storage: a
+ * reload should re-test, because by then they may have fixed it elsewhere.
+ */
+let zohoNeedsReauth = false;
+let zohoReauthMessage =
+  'Your Zoho Mail connection has expired. Reconnect your mailbox from the dashboard.';
+
+/** Call after a successful (re)link so mail is attempted again. */
+export function clearZohoReauthFlag(): void {
+  zohoNeedsReauth = false;
+}
+
+function fetchAPI<T = SheetRow>(
   action: string,
   method: 'GET' | 'POST' = 'GET',
   payload?: unknown,
-  params: Record<string, string> = {}
+  params: Record<string, string> = {},
+  attempt = 0
+): Promise<T> {
+  return doFetch<T>(action, method, payload, params, attempt);
+}
+
+async function doFetch<T = SheetRow>(
+  action: string,
+  method: 'GET' | 'POST' = 'GET',
+  payload?: unknown,
+  params: Record<string, string> = {},
+  attempt = 0
 ): Promise<T> {
   if (!API_URL) {
     throw new ApiError('NOT_CONFIGURED', 'VITE_API_URL is not set.', { action });
@@ -46,6 +85,21 @@ async function fetchAPI<T = SheetRow>(
     if (method === 'POST') {
       const body: Record<string, unknown> = { action, payload: payload ?? {} };
       if (token) body.token = token;
+
+      // The action goes in the BODY ONLY. Do not "helpfully" add it to the
+      // query string as well.
+      //
+      // Apps Script answers a POST with a 302, and a client following that
+      // redirect re-issues it as a GET with no body. With the action absent
+      // from the URL, that lands on `doGet` and fails loudly with "Missing
+      // action parameter" — annoying, but unmistakable, and the retry below
+      // handles it.
+      //
+      // Put the action in the URL and the GET path RUNS instead: it rebuilds
+      // the payload from the query string, which carries no credentials and
+      // no parameters, so `login` executes with an empty payload and reports
+      // "Username and password are required". A loud transport failure
+      // becomes a silent wrong answer. That is strictly worse.
       res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -63,6 +117,15 @@ async function fetchAPI<T = SheetRow>(
   } catch {
     // The browser gives no useful detail for a failed fetch (CORS, DNS and
     // offline all look identical), so the cause is deliberately not surfaced.
+    //
+    // Retry reads for the same reason as an unreadable response: a dropped
+    // connection to Apps Script is usually transient, and the alternative is
+    // telling the user the backend is unreachable when the next attempt would
+    // have worked.
+    if (isSafeToRetry(action) && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      return doFetch<T>(action, method, payload, params, attempt + 1);
+    }
     const err = new ApiError('NETWORK', 'Network request failed.', { action });
     reportApiFailure(action, err);
     throw err;
@@ -76,9 +139,53 @@ async function fetchAPI<T = SheetRow>(
   } catch {
     // Apps Script returns an HTML error page when a deployment is broken or
     // the URL is wrong — surface that instead of pretending there is no data.
+    //
+    // The response text used to be discarded, which left "unreadable response"
+    // as the entire evidence and made the cause guesswork. Apps Script's
+    // failures are distinguishable from their body, so classify it and log the
+    // start of what actually arrived.
+    const head = text.slice(0, 400);
+    let why = 'The response was not JSON.';
+    if (res.status === 404) {
+      // Apps Script answers with a 302 to a short-lived googleusercontent
+      // "user_content_key" URL. The Executions log shows doPost/doGet
+      // completing normally in a few seconds, so the script is fine — the key
+      // has simply expired by the time the browser follows the redirect.
+      // Retrying is the correct response, not investigating the backend.
+      why = 'The reply was ready but expired before the browser could collect ' +
+            'it. The server did the work; only the hand-off was lost.';
+    } else if (!text.trim()) {
+      why = 'The server sent an empty response — usually an execution that ' +
+            'timed out or was cut off part-way.';
+    } else if (/exceeded maximum execution time/i.test(text)) {
+      why = 'The script exceeded its execution time limit.';
+    } else if (/invoked too many times|quota|rate/i.test(text)) {
+      why = 'An Apps Script quota or rate limit was hit.';
+    } else if (/<html|<!doctype/i.test(text)) {
+      why = 'The server returned an HTML page instead of data — usually a ' +
+            'broken deployment, a wrong URL, or a sign-in redirect.';
+    } else if (text.length > 1000) {
+      why = 'The response looks truncated — it may have exceeded the ' +
+            'maximum size Apps Script can return.';
+    }
+
+    console.error(
+      `[api] ${action}: unreadable response (${text.length} bytes). ${why}\n` +
+      `[api] first 400 bytes: ${head}`
+    );
+
+    // A lost response is usually transient — an execution cut short under
+    // contention. Reading again costs one round trip and spares the user an
+    // error banner for something that works on the next attempt, which is
+    // exactly what navigating away and back was doing by hand.
+    if (isSafeToRetry(action) && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      return doFetch<T>(action, method, payload, params, attempt + 1);
+    }
+
     const err = new ApiError(
       'MALFORMED_RESPONSE',
-      `The server returned a non-JSON response for ${action}.`,
+      `${action}: ${why}`,
       { action }
     );
     reportApiFailure(action, err);
@@ -86,6 +193,19 @@ async function fetchAPI<T = SheetRow>(
   }
 
   if (json.status !== 'success') {
+    // "Missing action parameter" is not something a caller can cause — this
+    // function always sends one. It means the request reached the script
+    // stripped of its action, which happens when Apps Script's redirect is
+    // followed as a bare GET. Retry once rather than reporting a fault the
+    // user cannot act on.
+    const lostInTransit =
+      json.code === 'BAD_REQUEST' &&
+      /missing action parameter/i.test(json.message || '');
+
+    if (lostInTransit && attempt === 0) {
+      return fetchAPI<T>(action, method, payload, params, attempt + 1);
+    }
+
     const err = new ApiError(
       (json.code as ApiErrorCode) || 'INTERNAL',
       json.message || `Request failed: ${action}`,
@@ -133,8 +253,41 @@ async function batchRead(
   failed(key: string): boolean;
   errorFor(key: string): string | null;
 }> {
-  const res = await fetchAPI<{ results: BatchResult[] }>('batch', 'POST', { requests });
-  const byKey = new Map(res.results.map((r) => [r.key, r]));
+  let results: BatchResult[];
+
+  try {
+    const res = await fetchAPI<{ results: BatchResult[] }>('batch', 'POST', { requests });
+    results = res.results;
+  } catch (err) {
+    // A backend that does not know `batch` is an OLDER backend — the frontend
+    // was deployed ahead of it. Without this every page renders empty and the
+    // banner blames the data rather than the mismatch.
+    //
+    // Fall back to issuing the reads individually. Slower, which is the whole
+    // reason batch exists, but the app works while the backend catches up.
+    const code = err instanceof ApiError ? err.code : undefined;
+    const recoverable = code === 'UNKNOWN_ACTION' || code === 'BAD_REQUEST' ||
+                        code === 'NOT_FOUND';
+    if (!recoverable) throw err;
+
+    console.warn(
+      'The backend did not accept a batched read, so it is older than this ' +
+      'frontend. Falling back to individual requests — deploy the Apps Script ' +
+      'backend to restore normal speed.'
+    );
+
+    results = await Promise.all(requests.map(async (r): Promise<BatchResult> => {
+      try {
+        const data = await fetchAPI(r.action, 'POST', r.payload ?? {});
+        return { key: r.key, status: 'success', data };
+      } catch (subErr) {
+        const e = subErr instanceof ApiError ? subErr : toApiError(subErr);
+        return { key: r.key, status: 'error', code: e.code, message: e.message };
+      }
+    }));
+  }
+
+  const byKey = new Map(results.map((r) => [r.key, r]));
 
   // The batch itself succeeded, so fetchAPI already reported the transport as
   // healthy. A sub-request that failed is still a failure the user should see:
@@ -144,7 +297,7 @@ async function batchRead(
   //
   // NOT_FOUND is excluded — asking for a record that does not exist is a
   // normal answer, not an outage.
-  const broken = res.results.find(
+  const broken = results.find(
     (r) => r.status === 'error' && r.code !== 'NOT_FOUND' && r.code !== 'FORBIDDEN'
   );
   if (broken) {
@@ -198,6 +351,9 @@ function toLead(r: SheetRow): Lead {
     nextFollowUp: str(r.NextFollowUp),
     followUpStatus: str(r.FollowUpStatus),
     followUpCompletedAt: str(r.FollowUpCompletedAt),
+    followUpDelayReason: str(r.FollowUpDelayReason),
+    followUpDelayReasonAt: str(r.FollowUpDelayReasonAt),
+    followUpDelayReasonBy: str(r.FollowUpDelayReasonBy),
     researchFindings: str(r.ResearchFindings),
     qualificationReason: str(r.QualificationReason),
     researchSource: str(r.ResearchSource),
@@ -377,8 +533,18 @@ export const api = {
       });
       return toLead(res);
     },
-    update: async (id: string, payload: Partial<Lead>): Promise<void> => {
+    update: async (
+      id: string,
+      payload: Partial<Lead>,
+      /**
+       * Required by the server when moving a follow-up that has been overdue
+       * for more than a day. Not part of Lead: it explains one edit, it is not
+       * a property of the record, and the server writes the stored copy.
+       */
+      opts: { delayReason?: string } = {}
+    ): Promise<void> => {
       const body: Record<string, unknown> = { id };
+      if (opts.delayReason) body.delayReason = opts.delayReason;
       if (payload.status !== undefined) body.Status = payload.status;
       if (payload.notes !== undefined) body.Notes = payload.notes;
       if (payload.name !== undefined) body.Name = payload.name;
@@ -437,6 +603,24 @@ export const api = {
         'completeFollowUp', 'POST', { leadId, ...opts }
       );
       return { idempotent: Boolean(res?.idempotent) };
+    },
+
+    /**
+     * Record why a follow-up has been left outstanding.
+     *
+     * Separate from updateLead because the backend refuses to take this as an
+     * ordinary field — it stamps the author and the time itself, so an
+     * explanation can never be attributed to the wrong person or backdated
+     * onto a lapse it was not about.
+     */
+    explainDelay: async (
+      leadId: string,
+      reason: string
+    ): Promise<{ overdueHours: number }> => {
+      const res = await fetchAPI<{ overdueHours: number }>(
+        'explainFollowUpDelay', 'POST', { leadId, reason }
+      );
+      return { overdueHours: Number(res?.overdueHours) || 0 };
     },
   },
 
@@ -559,6 +743,8 @@ export const api = {
     },
     linkZoho: async (_id: string, redirectUri: string, code: string, state?: string): Promise<void> => {
       await fetchAPI('linkZoho', 'POST', { redirectUri, code, state });
+      // The mailbox works again, so let mail be attempted without a reload.
+      clearZohoReauthFlag();
     },
     unlinkZoho: async (id?: string): Promise<void> => {
       await fetchAPI('unlinkZoho', 'POST', id ? { id } : {});
@@ -698,10 +884,41 @@ export const api = {
      * message later leaving the mailbox.
      */
     getEmails: async (leadEmail: string, leadId?: string): Promise<ZohoEmailItem[]> => {
+      // A revoked or expired Zoho token cannot fix itself, so asking again is
+      // a guaranteed-failing round trip — and this runs on every lead opened.
+      // Once the backend says the connection needs reconnecting, stop asking
+      // until it is reconnected. Leads then open at the speed of the archive.
+      if (zohoNeedsReauth) {
+        throw new ApiError('ZOHO_REAUTH_REQUIRED', zohoReauthMessage, { action: 'getZohoEmails' });
+      }
       const params: Record<string, string> = { leadEmail };
       if (leadId) params.leadId = leadId;
-      const data = await fetchAPI('getZohoEmails', 'GET', null, params);
-      return asArray(data) as unknown as ZohoEmailItem[];
+      try {
+        const data = await fetchAPI('getZohoEmails', 'GET', null, params);
+        return asArray(data) as unknown as ZohoEmailItem[];
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 'ZOHO_REAUTH_REQUIRED') {
+          zohoNeedsReauth = true;
+          zohoReauthMessage = err.displayMessage;
+        }
+        throw err;
+      }
+    },
+
+    /**
+     * The real body of one message.
+     *
+     * Both a search result and an archived row carry only Zoho's `summary`,
+     * which is cut off mid-sentence. This is the only way to show what was
+     * actually written, and it costs a Zoho round trip — so it is called when
+     * someone opens a message, never for a whole list.
+     */
+    getEmailContent: async (
+      messageId: string, opts: { leadId?: string; folderId?: string } = {}
+    ): Promise<{ content: string; complete: boolean; note?: string }> => {
+      return await fetchAPI('getEmailContent', 'POST', {
+        messageId, leadId: opts.leadId || '', folderId: opts.folderId || '',
+      });
     },
 
     /** The archived conversation, readable without a live Zoho connection. */

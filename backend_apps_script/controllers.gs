@@ -36,9 +36,40 @@ function invalidateSheetCache(sheetName) {
   delete __recordCache[sheetName];
 }
 
-function getSheetByName(sheetName) {
-  if (__sheetHandleCache[sheetName]) return __sheetHandleCache[sheetName];
+/**
+ * Remember which Drive file backs each sheet.
+ *
+ * Resolving a sheet by NAME costs three remote calls every time: open the
+ * folder, scan it for a matching filename, then open the spreadsheet. The
+ * handle cache only lived for one request, so a page touching six sheets paid
+ * eighteen round trips before reading a single row — seconds of pure lookup
+ * on every request, for an answer that changes approximately never.
+ *
+ * The id is cached in Script Properties, which survive between executions.
+ * A stale id is self-healing: if the file has moved or been replaced, the
+ * open fails, the entry is dropped and the folder is scanned once more.
+ */
+function cachedSheetFileId(sheetName) {
+  return PropertiesService.getScriptProperties().getProperty('SHEETID_' + sheetName);
+}
 
+function rememberSheetFileId(sheetName, fileId) {
+  try {
+    PropertiesService.getScriptProperties().setProperty('SHEETID_' + sheetName, fileId);
+  } catch (e) {
+    // A cache that cannot be written is slow, not broken.
+    Logger.log('Could not cache the file id for ' + sheetName + ': ' + e.message);
+  }
+}
+
+function forgetSheetFileId(sheetName) {
+  try {
+    PropertiesService.getScriptProperties().deleteProperty('SHEETID_' + sheetName);
+  } catch (e) { /* nothing to do */ }
+}
+
+/** The slow path: find the file by name inside the database folder. */
+function locateSheetFile(sheetName) {
   var dbFolderId = PropertiesService.getScriptProperties().getProperty('DB_FOLDER_ID');
   if (!dbFolderId) {
     throw new ApiError('STORAGE_ERROR',
@@ -56,8 +87,37 @@ function getSheetByName(sheetName) {
   if (!files.hasNext()) {
     throw new ApiError('STORAGE_ERROR', 'Database sheet "' + sheetName + '" not found.');
   }
+  return files.next().getId();
+}
 
-  var sheet = SpreadsheetApp.openById(files.next().getId()).getActiveSheet();
+function getSheetByName(sheetName) {
+  if (__sheetHandleCache[sheetName]) return __sheetHandleCache[sheetName];
+
+  var sheet = null;
+  var fileId = cachedSheetFileId(sheetName);
+
+  if (fileId) {
+    try {
+      sheet = SpreadsheetApp.openById(fileId).getActiveSheet();
+    } catch (e) {
+      // Moved, renamed, deleted, or the id was never right. Fall through to
+      // the folder scan and re-learn it.
+      forgetSheetFileId(sheetName);
+      sheet = null;
+    }
+  }
+
+  if (!sheet) {
+    var located = locateSheetFile(sheetName);
+    try {
+      sheet = SpreadsheetApp.openById(located).getActiveSheet();
+    } catch (e) {
+      throw new ApiError('STORAGE_ERROR',
+        'Database sheet "' + sheetName + '" could not be opened: ' + e.message);
+    }
+    rememberSheetFileId(sheetName, located);
+  }
+
   __sheetHandleCache[sheetName] = sheet;
   return sheet;
 }
@@ -90,11 +150,28 @@ function getRecordsRaw(sheetName) {
     return [];
   }
 
-  var headers = data[0];
+  // Row 2 of the sheet is data[1], so the first record's sheet row is 2.
+  //
+  // The mapping (blank-row skip, formula-guard unescaping, __rowIndex) lives in
+  // rowsToRecords so the partial-read path below produces records that are
+  // indistinguishable from these.
+  var out = rowsToRecords(data[0], data.slice(1), 2);
+
+  __recordCache[sheetName] = out;
+  return out;
+}
+
+/**
+ * Turn a header row plus data rows into records, exactly as getRecordsRaw does.
+ *
+ * `firstRowNumber` is the sheet row number of rows[0], so __rowIndex stays a
+ * real sheet coordinate when only part of the sheet has been read.
+ */
+function rowsToRecords(headers, rows, firstRowNumber) {
   var out = [];
-  for (var i = 1; i < data.length; i++) {
-    var row = data[i];
-    // Skip fully blank rows — clearContent() leaves these behind.
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+
     var blank = true;
     for (var c = 0; c < row.length; c++) {
       if (row[c] !== '' && row[c] !== null && row[c] !== undefined) { blank = false; break; }
@@ -104,20 +181,11 @@ function getRecordsRaw(sheetName) {
     var obj = {};
     for (var h = 0; h < headers.length; h++) {
       if (!headers[h]) continue;
-      // Undo the formula-injection guard on the way out.
-      //
-      // Values beginning + = - @ are stored with a leading apostrophe so
-      // Sheets treats them as text. Real Sheets hides that apostrophe on
-      // read, but relying on that would mean the API returns different
-      // strings depending on where it runs — and phone numbers here start
-      // with "+", so a stray apostrophe would reach the UI.
       obj[headers[h]] = desanitiseCell(row[h]);
     }
-    obj.__rowIndex = i + 1; // 1-based sheet row, saves a re-scan on update
+    obj.__rowIndex = firstRowNumber + i;
     out.push(obj);
   }
-
-  __recordCache[sheetName] = out;
   return out;
 }
 
@@ -470,9 +538,10 @@ function getFinancialKPIs() {
  * grows without bound while the answer stays the same size.
  */
 function getLogs(entityId, window) {
-  var all = getRecordsRaw('Logs');
   var fromTime = window && window.fromTime != null ? window.fromTime : null;
   var untilTime = window && window.untilTime != null ? window.untilTime : null;
+
+  var all = getRecordsRaw('Logs');
   // An action filter is a payload saving, not a security control. Screens want
   // one or two kinds of entry — daily summaries, meetings; without this they
   // pulled every row the CRM has ever written and discarded 99% of them in the
@@ -1192,6 +1261,132 @@ function completeFollowUp(actor, payload) {
   }, 'completeFollowUp');
 }
 
+/* ------------------------------------------------------------------ *
+ * Stale follow-ups
+ * ------------------------------------------------------------------ */
+
+/** A follow-up is stale once it has been due, and untouched, for this long. */
+var FOLLOWUP_STALE_HOURS = 24;
+
+/**
+ * How many hours past due an open follow-up is. 0 when it is not overdue,
+ * or when it is no longer anybody's problem (completed or cancelled).
+ *
+ * The due date is a plain date, so it counts as due at the END of that day —
+ * a follow-up set for today is not late at 9am.
+ */
+function followUpOverdueHours(lead) {
+  if (!lead) return 0;
+  var status = String(lead.FollowUpStatus || '') || 'Planned';
+  if (status === 'Completed' || status === 'Cancelled') return 0;
+
+  var due = String(lead.NextFollowUp || '');
+  if (!due) return 0;
+
+  var dueAt = Date.parse(due.length <= 10 ? due + 'T23:59:59Z' : due);
+  if (isNaN(dueAt)) return 0;
+
+  var hours = (Date.now() - dueAt) / 3600000;
+  return hours > 0 ? hours : 0;
+}
+
+/**
+ * Whether an explanation has already been given for THIS lapse.
+ *
+ * A reason recorded before the follow-up came due was about some earlier
+ * slip, so it does not settle the current one — otherwise one explanation in
+ * January would excuse every missed date for the rest of the year.
+ */
+function hasCurrentDelayReason(lead) {
+  if (!lead || !String(lead.FollowUpDelayReason || '')) return false;
+
+  var loggedAt = Date.parse(String(lead.FollowUpDelayReasonAt || ''));
+  if (isNaN(loggedAt)) return false;
+
+  var due = String(lead.NextFollowUp || '');
+  var dueAt = Date.parse(due.length <= 10 ? due + 'T23:59:59Z' : due);
+  if (isNaN(dueAt)) return false;
+
+  return loggedAt >= dueAt;
+}
+
+/**
+ * Record why a follow-up has been left outstanding.
+ *
+ * Deliberately its own action rather than a writable field: the person, the
+ * time and the fact that it refers to THIS lapse are all established
+ * server-side. Made writable, a client could backfill an explanation onto a
+ * date it was never about.
+ */
+function explainFollowUpDelay(actor, payload) {
+  payload = payload || {};
+  var leadId = String(payload.leadId || payload.id || '');
+  if (!leadId) throw new ApiError('BAD_REQUEST', 'leadId is required.');
+
+  var reason = String(payload.reason || '').trim();
+  if (reason.length < 5) {
+    throw new ApiError('VALIDATION_FAILED',
+      'Say briefly why this follow-up has not happened yet.');
+  }
+  if (reason.length > 500) reason = reason.slice(0, 500);
+
+  return withLock(function () {
+    var lead = getScopedRecordById('Leads', leadId, 'explainFollowUpDelay', actor);
+
+    var overdue = followUpOverdueHours(lead);
+    if (!overdue) {
+      throw new ApiError('VALIDATION_FAILED',
+        'This follow-up is not overdue, so there is nothing to explain.');
+    }
+
+    var now = new Date().toISOString();
+    var updated = updateRecordRaw('Leads', leadId, {
+      FollowUpDelayReason: reason,
+      FollowUpDelayReasonAt: now,
+      FollowUpDelayReasonBy: actor ? actor.ID : 'SYSTEM'
+    });
+
+    auditLog({
+      entityId: leadId, entityType: 'Lead', action: 'FOLLOWUP_DELAYED',
+      userId: actor ? actor.ID : 'SYSTEM',
+      details: 'Follow-up ' + Math.floor(overdue) + 'h overdue: ' + reason,
+      metadata: { due: lead.NextFollowUp || '', overdueHours: Math.floor(overdue) }
+    });
+
+    return { lead: stripInternal(updated), overdueHours: Math.floor(overdue) };
+  }, 'explainFollowUpDelay');
+}
+
+/**
+ * Refuse to quietly push a stale follow-up further out.
+ *
+ * Moving the date is the one edit that makes a missed follow-up disappear:
+ * the lead stops looking overdue and nothing records that it ever was. So
+ * once it has been stale for a day, changing the date costs one sentence.
+ * Every other edit — notes, status, research — is untouched, and a follow-up
+ * that is merely late rather than stale is untouched too.
+ */
+function guardStaleReschedule(lead, patch, payload, actor) {
+  if (patch.NextFollowUp === undefined) return false;
+  if (String(patch.NextFollowUp) === String(lead.NextFollowUp || '')) return false;
+
+  var overdue = followUpOverdueHours(lead);
+  if (overdue < FOLLOWUP_STALE_HOURS) return false;
+  if (hasCurrentDelayReason(lead)) return false;
+
+  var reason = String(payload.delayReason || '').trim();
+  if (reason.length < 5) {
+    throw new ApiError('FOLLOWUP_REASON_REQUIRED',
+      'This follow-up has been overdue for more than a day. Say briefly why ' +
+      'before moving it to a new date.');
+  }
+
+  patch.FollowUpDelayReason = reason.slice(0, 500);
+  patch.FollowUpDelayReasonAt = new Date().toISOString();
+  patch.FollowUpDelayReasonBy = actor ? actor.ID : 'SYSTEM';
+  return true;
+}
+
 /** Cancel a follow-up without claiming it was done. */
 function cancelFollowUp(actor, payload) {
   payload = payload || {};
@@ -1797,10 +1992,30 @@ function getActivityFeed(actor, params) {
   // ever run over the day being asked for.
   var all = scopedLogs(null, actor, { fromTime: fromTime, untilTime: untilTime });
 
+  // Send only what the feed draws.
+  //
+  // A log row carries Metadata — the full JSON before/after of every edit —
+  // which nothing in the feed reads. Shipping 100 of those made the response
+  // large enough to come back unusable ("the server returned an unreadable
+  // response"), and every byte of it was serialised, transferred and then
+  // discarded by the browser. The columns below are exactly the ones
+  // GlobalActivityFeed renders.
   var out = [];
   var total = all.length;
   for (var i = 0; i < all.length && out.length < limit; i++) {
-    out.push(all[i]);                            // scopedLogs is newest-first
+    var row = all[i];                            // scopedLogs is newest-first
+    out.push({
+      ID: row.ID,
+      Timestamp: row.Timestamp,
+      Action: row.Action,
+      EntityId: row.EntityId,
+      EntityType: row.EntityType,
+      UserId: row.UserId,
+      ContactMode: row.ContactMode,
+      // Long free text is the other thing that can run away here: a pasted
+      // email body ends up in Details. The feed shows a one-line summary.
+      Details: String(row.Details == null ? '' : row.Details).slice(0, 300)
+    });
   }
 
   return {

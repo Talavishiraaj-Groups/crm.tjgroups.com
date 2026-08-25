@@ -68,7 +68,12 @@ function buildZohoAuthUrl(actor, payload) {
     CacheService.getScriptCache().put('zoho_state:' + nonce, actor.ID, 900);
   } catch (e) { /* cache is advisory; the signature is the real check */ }
 
-  var scope = 'ZohoMail.messages.ALL,ZohoMail.accounts.READ';
+  // folders.READ is needed to find the Sent folder. Without it a mailbox can
+  // only ever be listed as its Inbox, so replies never reach the archive and a
+  // manager sees half of every conversation. Tokens issued before this scope
+  // existed keep working for messages and simply cannot list folders — see
+  // syncableFolders, which degrades rather than failing.
+  var scope = 'ZohoMail.messages.ALL,ZohoMail.accounts.READ,ZohoMail.folders.READ';
   var url = cfg.accountsHost + '/oauth/v2/auth' +
     '?response_type=code' +
     '&client_id=' + encodeURIComponent(cfg.clientId) +
@@ -186,6 +191,14 @@ function unlinkZoho(actor, payload) {
     targetId = String(payload.id);
   }
 
+  // Drop any cached access token first, while the refresh token is still
+  // readable — afterwards there is nothing left to derive the cache key from,
+  // and a live token would sit in the cache for the rest of its window.
+  var current = getRecordByIdRaw('Users', targetId);
+  if (current && current.ZohoRefreshToken) {
+    forgetZohoAccessToken(String(current.ZohoRefreshToken));
+  }
+
   updateRecordRaw('Users', targetId, {
     ZohoEmail: '', ZohoRefreshToken: '', ZohoAccountId: '', ZohoLinkedAt: ''
   });
@@ -222,7 +235,37 @@ function requireUserZoho(userId) {
   return { user: user, refreshToken: token };
 }
 
+/**
+ * Access tokens last an hour; cache for slightly less.
+ *
+ * Zoho limits how often a refresh token may mint new access tokens, and
+ * refuses with "Access Denied" once you cross it — which reads exactly like a
+ * revoked connection. Every Zoho operation used to mint a fresh token, so
+ * opening a handful of leads was enough to trip it: sending mail worked one
+ * moment and reading it failed the next, on the same account.
+ */
+var ZOHO_TOKEN_CACHE_SECONDS = 3300;
+
+/** Cache under a digest — never store a refresh token as a lookup key. */
+function zohoTokenCacheKey(refreshToken) {
+  var digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256, String(refreshToken));
+  return 'zoho_at:' + Utilities.base64EncodeWebSafe(digest);
+}
+
+function forgetZohoAccessToken(refreshToken) {
+  try {
+    CacheService.getScriptCache().remove(zohoTokenCacheKey(refreshToken));
+  } catch (e) { /* a cache miss is not worth failing a request over */ }
+}
+
 function getZohoAccessToken(refreshToken) {
+  var cacheKey = zohoTokenCacheKey(refreshToken);
+  try {
+    var hit = CacheService.getScriptCache().get(cacheKey);
+    if (hit) return hit;
+  } catch (e) { /* fall through and mint a new one */ }
+
   var cfg = getZohoConfig();
   var response = zohoFetch(cfg.accountsHost + '/oauth/v2/token', {
     method: 'post',
@@ -235,11 +278,31 @@ function getZohoAccessToken(refreshToken) {
     muteHttpExceptions: true
   });
 
-  var data = parseZohoJson(response, 'token refresh');
-  if (!data.access_token) {
-    throw new ApiError('EXTERNAL_ERROR',
-      'Zoho rejected the stored credentials. Please reconnect your mailbox.');
+  // A refusal here is PERMANENT until somebody reconnects — the token has been
+  // revoked, has expired, or was issued for different credentials. Reported as
+  // a generic external error it was indistinguishable from a transient Zoho
+  // blip, so the client re-attempted it on every single lead and paid a full
+  // round trip each time for a call that could not succeed.
+  var data;
+  try {
+    data = parseZohoJson(response, 'token refresh');
+  } catch (err) {
+    throw new ApiError('ZOHO_REAUTH_REQUIRED',
+      'Your Zoho Mail connection has expired or been revoked. Reconnect your ' +
+      'mailbox from the dashboard to read and send mail again.' +
+      (err && err.message ? ' (Zoho said: ' + err.message + ')' : ''));
   }
+
+  if (!data.access_token) {
+    throw new ApiError('ZOHO_REAUTH_REQUIRED',
+      'Zoho rejected the stored credentials. Reconnect your mailbox from the ' +
+      'dashboard.');
+  }
+
+  try {
+    CacheService.getScriptCache().put(cacheKey, data.access_token, ZOHO_TOKEN_CACHE_SECONDS);
+  } catch (e) { /* caching is an optimisation, never a requirement */ }
+
   return data.access_token;
 }
 
@@ -257,7 +320,30 @@ function zohoAccounts(accessToken, cfg) {
 function openMailbox(userId) {
   var link = requireUserZoho(userId);
   var accessToken = getZohoAccessToken(link.refreshToken);
-  var accounts = zohoAccounts(accessToken);
+
+  // The account id and address never change once known, and they are already
+  // stored on the user row — so re-asking Zoho for them on every operation was
+  // a round trip that could only ever return the same answer.
+  var knownId = String(link.user.ZohoAccountId || '');
+  var knownEmail = String(link.user.ZohoEmail || '');
+  if (knownId && knownEmail) {
+    return {
+      accessToken: accessToken, accountId: knownId,
+      email: knownEmail, user: link.user
+    };
+  }
+
+  var accounts;
+  try {
+    accounts = zohoAccounts(accessToken);
+  } catch (err) {
+    // A cached token that Zoho has since invalidated — a reconnect, most
+    // often — would otherwise keep failing for the rest of the cache window.
+    // Drop it and try once with a fresh one.
+    forgetZohoAccessToken(link.refreshToken);
+    accessToken = getZohoAccessToken(link.refreshToken);
+    accounts = zohoAccounts(accessToken);
+  }
 
   if (!accounts.length) {
     throw new ApiError('EXTERNAL_ERROR', 'No Zoho mailbox is available for this account.');
@@ -313,6 +399,38 @@ var MAX_MAILBOX_SYNC = 200;
  * only in `fromAddress`. Matching is case-insensitive because mail addresses
  * are, and a mismatch here silently files an inbound reply as outbound.
  */
+/**
+ * Is this message genuinely part of the conversation with `address`?
+ *
+ * Checks every party field Zoho populates. Used to validate what a search
+ * returned rather than assuming the server filtered it, because it does not
+ * reliably do so.
+ */
+function messageInvolves(msg, address) {
+  var needle = bareAddress(address);
+  if (!needle || !msg) return false;
+
+  var parties = [
+    msg.sender, msg.fromAddress, msg.toAddress, msg.ccAddress, msg.bccAddress
+  ];
+
+  for (var i = 0; i < parties.length; i++) {
+    var field = decodeEntities(parties[i]).toLowerCase();
+    if (!field) continue;
+    // A field may hold several addresses. Match each one whole, never as a
+    // substring: two addresses differing by a single leading character belong
+    // to different people, and a contains-check would merge their mail.
+    var parts = field.split(/[,;]/);
+    for (var p = 0; p < parts.length; p++) {
+      if (bareAddress(parts[p]) === needle) return true;
+    }
+    // Fall back to a bounded containment check for shapes bareAddress cannot
+    // parse, e.g. a raw header blob.
+    if (field.indexOf('<' + needle + '>') !== -1) return true;
+  }
+  return false;
+}
+
 function isInboundFrom(msg, leadEmail) {
   var needle = String(leadEmail || '').trim().toLowerCase();
   if (!needle) return false;
@@ -332,30 +450,36 @@ function getZohoEmails(actor, params) {
   var box = openMailbox(actor.ID);
   var cfg = getZohoConfig();
 
-  // Outbound is found by recipient; inbound by sender. Zoho's search accepts
-  // more than one spelling of the sender key depending on the endpoint
-  // version, and picking the wrong one fails SILENTLY — it returns an empty
-  // list rather than an error. That is exactly what happened: messages we
-  // sent appeared (matched by `to:`) and every reply was invisible.
-  //
-  // So ask for both spellings and merge. A key the server does not recognise
-  // costs one empty response; getting it wrong costs the entire inbound half
-  // of every conversation.
+  // Ask by recipient and by sender, using both spellings of the sender key
+  // because Zoho's accepted vocabulary varies by endpoint version.
   var merged = zohoSearch(box, cfg, 'to:' + leadEmail);
   var senderKeys = ['from:', 'sender:'];
   for (var s = 0; s < senderKeys.length; s++) {
-    var hits = zohoSearch(box, cfg, senderKeys[s] + leadEmail);
-    if (hits.length) merged = merged.concat(hits);
+    merged = merged.concat(zohoSearch(box, cfg, senderKeys[s] + leadEmail));
   }
 
   var seen = {};
   var unique = [];
   for (var i = 0; i < merged.length; i++) {
     var m = merged[i];
-    if (m && m.messageId && !seen[m.messageId]) {
-      seen[m.messageId] = true;
-      unique.push(m);
-    }
+    if (!m || !m.messageId || seen[m.messageId]) continue;
+
+    // THE SEARCH RESULT IS NOT TRUSTED.
+    //
+    // A search key Zoho does not recognise does not return an empty list — it
+    // appears to ignore the filter and return the whole mailbox. So a lead
+    // with no correspondence at all was shown ten unrelated messages,
+    // including private threads between colleagues that had nothing to do
+    // with that company. Wrong data on a lead page is worse than missing
+    // data: it is acted on.
+    //
+    // Every message is therefore verified here against the lead's actual
+    // address. Whatever the search does or does not filter, only genuine
+    // correspondence with this lead survives.
+    if (!messageInvolves(m, leadEmail)) continue;
+
+    seen[m.messageId] = true;
+    unique.push(m);
   }
 
   unique.sort(function (a, b) {
@@ -365,14 +489,20 @@ function getZohoEmails(actor, params) {
 
   var bodyBudget = Math.max(0, unique.length - MAX_BODY_FETCH);
 
-  // Persist the envelope so the conversation survives the mailbox.
-  persistEmailLog(actor, params.leadId, leadEmail, unique);
+  // Fetch the bodies we are allowed to, ONCE, and reuse them for both the
+  // response and the archive. Doing it here rather than inside the map means
+  // the stored copy is the real message, not Zoho's truncated summary.
+  var fetchedBodies = {};
+  for (var b = bodyBudget; b < unique.length; b++) {
+    var body = fetchZohoMessageContent(box, cfg, unique[b].folderId, unique[b].messageId);
+    if (body) fetchedBodies[String(unique[b].messageId)] = body;
+  }
+
+  // Persist the conversation so it survives the mailbox.
+  persistEmailLog(actor, params.leadId, leadEmail, unique, fetchedBodies);
 
   return unique.map(function (m, index) {
-    var content = '';
-    if (index >= bodyBudget) {
-      content = fetchZohoMessageContent(box, cfg, m.folderId, m.messageId);
-    }
+    var content = fetchedBodies[String(m.messageId)] || '';
     return {
       id: m.messageId,
       subject: m.subject || '(No Subject)',
@@ -397,7 +527,60 @@ function getZohoEmails(actor, params) {
  *
  * Never throws: failing to archive mail must not stop the user reading it.
  */
-function persistEmailLog(actor, leadId, leadEmail, messages) {
+/**
+ * A Google Sheets cell holds 50,000 characters. Leave headroom rather than
+ * discovering the ceiling mid-write.
+ */
+var MAX_STORED_BODY = 45000;
+
+/** Store a message body, saying honestly whether it is the whole thing. */
+function bodyForStorage(content) {
+  var s = String(content == null ? '' : content);
+  if (s.length <= MAX_STORED_BODY) return { body: s, complete: s.length > 0 };
+  return { body: s.slice(0, MAX_STORED_BODY), complete: false };
+}
+
+/** The archived body of one message, or null. */
+function readMessageBody(messageId) {
+  var rows = getRecordsRaw('EmailBodies');
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i].MessageId) !== String(messageId)) continue;
+    return {
+      body: String(rows[i].Body || ''),
+      complete: isTrueFlag(rows[i].BodyComplete)
+    };
+  }
+  return null;
+}
+
+/**
+ * Archive a message body, once.
+ *
+ * Never throws: keeping a copy is a convenience, and failing to store it must
+ * not stop somebody reading their mail.
+ */
+function storeMessageBody(messageId, content) {
+  try {
+    if (!messageId || !content) return false;
+
+    var existing = readMessageBody(messageId);
+    if (existing && existing.body) return false;   // already have it
+
+    var prepared = bodyForStorage(content);
+    appendRecordRaw('EmailBodies', {
+      MessageId: String(messageId),
+      Body: prepared.body,
+      BodyComplete: prepared.complete ? 'TRUE' : '',
+      StoredAt: new Date().toISOString()
+    });
+    return true;
+  } catch (e) {
+    Logger.log('Could not archive message body: ' + e.message);
+    return false;
+  }
+}
+
+function persistEmailLog(actor, leadId, leadEmail, messages, bodies) {
   if (!messages || !messages.length) return 0;
 
   try {
@@ -420,6 +603,7 @@ function persistEmailLog(actor, leadId, leadEmail, messages) {
       var sentAt = toIsoTimestamp(msg.receivedTime, now);
       var subject = String(msg.subject || '(No Subject)').slice(0, 500);
 
+
       appendRecordRaw('EmailLog', {
         MessageId: id,
         LeadId: String(leadId || ''),
@@ -428,11 +612,20 @@ function persistEmailLog(actor, leadId, leadEmail, messages) {
         Direction: inbound ? 'in' : 'out',
         Subject: subject,
         Summary: String(msg.summary || '').slice(0, 2000),
-        Sender: String(msg.sender || ''),
+        // Prefer whichever field actually carries an address: Zoho sometimes
+        // puts only a display name in `sender`, which cannot be matched
+        // against anything later.
+        Sender: String(bareAddress(msg.sender) ? msg.sender
+                     : (msg.fromAddress || msg.sender || '')),
         ToAddress: String(msg.toAddress || ''),
         SentAt: sentAt,
-        SyncedAt: now
+        SyncedAt: now,
+        FolderId: String(msg.folderId || '')
       });
+
+      // The body goes to its own sheet, so listing a conversation never has
+      // to read it.
+      if (bodies && bodies[id]) storeMessageBody(id, bodies[id]);
       seen[id] = true;
       stored++;
 
@@ -489,15 +682,46 @@ function getStoredEmails(actor, params) {
   }
 
   // Reading a lead's mail requires the right to read the lead itself.
-  if (leadId) getScopedRecordById('Leads', leadId, 'getLeadById', actor);
+  var lead = leadId ? getScopedRecordById('Leads', leadId, 'getLeadById', actor) : null;
+
+  // The lead's REAL address, from the record — not from the request, and not
+  // from whatever LeadEmail happens to be stored on the row.
+  var authoritative = bareAddress(lead ? lead.Email : leadEmail);
 
   var rows = getRecordsRaw('EmailLog');
   var out = [];
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
-    var matches = (leadId && String(r.LeadId) === leadId) ||
-                  (leadEmail && String(r.LeadEmail).toLowerCase() === leadEmail);
-    if (matches) out.push(r);
+
+    var filedHere = (leadId && String(r.LeadId) === leadId) ||
+                    (leadEmail && String(r.LeadEmail).toLowerCase() === leadEmail);
+    if (!filedHere) continue;
+
+    // Being filed under this lead is NOT enough.
+    //
+    // An earlier bug wrote unrelated mail into the archive against the wrong
+    // lead, and because this only matched on LeadId those rows kept appearing
+    // — one company's page showing another's correspondence, marked "SAVED IN
+    // CRM" as though it were verified. Stored data deserves the same check as
+    // a live search result: prove the lead's own address is actually on the
+    // message.
+    // The message must actually involve this lead. Nothing else counts.
+    //
+    // There used to be a fallback here that kept a row when its LeadEmail
+    // matched, meaning to rescue mail synced before a lead's address was
+    // corrected. But LeadEmail records WHICH LEAD WAS OPEN when the row was
+    // written — not who was on the message. That is precisely the signature
+    // of the mis-filing bug, so the fallback rescued exactly the rows it
+    // should have rejected: a lead's page kept showing correspondence with
+    // completely different people, badged "SAVED IN CRM".
+    if (authoritative && !messageInvolves({
+      sender: r.Sender, fromAddress: r.Sender,
+      toAddress: r.ToAddress, ccAddress: r.CcAddress
+    }, authoritative)) {
+      continue;
+    }
+
+    out.push(r);
   }
 
   out.sort(function (a, b) {
@@ -507,17 +731,266 @@ function getStoredEmails(actor, params) {
   return stripAll(out);
 }
 
+/**
+ * Find archive rows filed against a lead they have nothing to do with.
+ *
+ * Reports only. Run it, read the output, then run repairEmailLog() if the
+ * list is what you expect.
+ */
+function auditEmailLogAttribution() {
+  var rows = getRecordsRaw('EmailLog');
+  var leads = getRecordsRaw('Leads');
+
+  var emailOf = {};
+  for (var l = 0; l < leads.length; l++) {
+    emailOf[String(leads[l].ID)] = bareAddress(leads[l].Email);
+  }
+
+  var bad = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var leadId = String(r.LeadId || '');
+    if (!leadId) continue;
+
+    var expected = emailOf[leadId];
+    if (!expected) continue;   // lead deleted or unknown; leave it alone
+
+    // Same rule the display uses, deliberately. LeadEmail records which lead
+    // was open when the row was written, not who was on the message — so
+    // accepting it here would report rows as correctly filed that the lead
+    // page refuses to show, and the two would quietly disagree about what
+    // belongs to whom.
+    var involves = messageInvolves({
+      sender: r.Sender, fromAddress: r.Sender,
+      toAddress: r.ToAddress, ccAddress: r.CcAddress
+    }, expected);
+
+    if (!involves) {
+      bad.push({
+        id: String(r.ID), leadId: leadId, expected: expected,
+        subject: String(r.Subject || ''),
+        sender: String(r.Sender || ''), to: String(r.ToAddress || '')
+      });
+    }
+  }
+
+  Logger.log('==================================================');
+  Logger.log(' EMAIL ARCHIVE ATTRIBUTION AUDIT');
+  Logger.log('==================================================');
+  Logger.log(' rows checked      : ' + rows.length);
+  Logger.log(' wrongly attributed: ' + bad.length);
+  for (var b = 0; b < Math.min(bad.length, 40); b++) {
+    Logger.log('   ' + bad[b].subject + '  [from ' + bad[b].sender +
+               ' to ' + bad[b].to + '] filed under a lead whose address is ' +
+               bad[b].expected);
+  }
+  if (bad.length > 40) Logger.log('   ... and ' + (bad.length - 40) + ' more');
+  Logger.log('');
+  if (bad.length) {
+    Logger.log(' Nothing was changed. Run repairEmailLog() to detach these.');
+  } else {
+    // Do not prompt an action that is not needed: it reads as though the
+    // clean result were somehow incomplete.
+    Logger.log(' Every archived message is filed against a lead it belongs to.');
+    Logger.log(' No action required.');
+  }
+  Logger.log('==================================================');
+
+  return { checked: rows.length, wronglyAttributed: bad.length, rows: bad };
+}
+
+/**
+ * Detach wrongly-attributed archive rows from their lead.
+ *
+ * The row is NOT deleted — only its LeadId is cleared. The message is real
+ * mail from a real mailbox; it simply does not belong to that company. Once
+ * detached it appears under "no matching lead" instead, where it can be
+ * looked at rather than silently discarded.
+ */
+function repairEmailLog() {
+  var audit = auditEmailLogAttribution();
+  if (!audit.wronglyAttributed) {
+    Logger.log('Nothing to repair.');
+    return { detached: 0 };
+  }
+
+  var detached = 0;
+  for (var i = 0; i < audit.rows.length; i++) {
+    try {
+      updateRecordRaw('EmailLog', audit.rows[i].id, { LeadId: '' });
+      detached++;
+    } catch (e) {
+      Logger.log('Could not detach ' + audit.rows[i].id + ': ' + e.message);
+    }
+  }
+
+  Logger.log('');
+  Logger.log(' Detached ' + detached + ' row(s) from the wrong lead.');
+  Logger.log(' No message was deleted; they now show as having no matching lead.');
+
+  auditLog({
+    entityId: 'SYSTEM', entityType: 'System', action: 'EMAILLOG_REPAIRED',
+    userId: 'SYSTEM',
+    details: detached + ' archive row(s) detached from a lead they did not belong to.'
+  });
+
+  return { detached: detached };
+}
+
+/**
+ * The full body of ONE message, fetched on demand.
+ *
+ * Neither source of a stored message carries the whole thing: Zoho's search
+ * returns a `summary` that is cut off mid-sentence, and the archive stores
+ * that same summary. So "Full view" was showing a truncated paragraph and
+ * calling it the full text.
+ *
+ * Fetching every body up front is not an option — it is one UrlFetch call per
+ * message on a shared free-tier quota. Fetching one when someone actually
+ * opens it costs a single call and is the only way to show the real content.
+ */
+/**
+ * The archive row for one message id, or null.
+ *
+ * One scan, reused for the authorisation decision, the folder id and the
+ * summary fallback. Reading a body used to walk the whole EmailLog sheet twice
+ * for a single request, which on the free tier is the part that costs.
+ */
+function findEmailLogRow(messageId) {
+  var id = String(messageId || '');
+  if (!id) return null;
+  var rows = getRecordsRaw('EmailLog');
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i].MessageId) === id) return rows[i];
+  }
+  return null;
+}
+
+function getEmailContent(actor, params) {
+  params = params || {};
+  if (!actor) throw new ApiError('UNAUTHENTICATED', 'Sign in first.');
+
+  var messageId = String(params.messageId || '');
+  if (!messageId) throw new ApiError('BAD_REQUEST', 'messageId is required.');
+
+  var logRow = findEmailLogRow(messageId);
+
+  // A leadId the caller names is checked whether or not it turns out to be the
+  // right one — claiming a lead you cannot see is refused on its own.
+  var leadId = String(params.leadId || '');
+  if (leadId) getScopedRecordById('Leads', leadId, 'getLeadById', actor);
+
+  // Authorise the MESSAGE, not the claim attached to the request.
+  //
+  // leadId used to be optional and was the ONLY check, so omitting it skipped
+  // authorisation entirely — and the archived-body shortcut below answered
+  // before the mailbox was ever opened. Any signed-in user could therefore
+  // read any archived body by guessing or replaying a message id, straight
+  // past the scoping getStoredEmails and getUnmatchedEmails apply to the
+  // lists those bodies appear in.
+  if (logRow) {
+    var ownerLead = String(logRow.LeadId || '');
+    var leadRecord = ownerLead ? getRecordByIdRaw('Leads', ownerLead) : null;
+
+    if (leadRecord) {
+      // A filed message inherits its lead's permissions.
+      getScopedRecordById('Leads', ownerLead, 'getLeadById', actor);
+    } else {
+      // Unfiled — or filed against a lead that no longer exists. Either way
+      // the rule is the one getUnmatchedEmails uses, so opening a message can
+      // never reveal more than the list that offered it.
+      var allowed = mailVisibleUserIds(actor);
+      if (allowed !== null && allowed.indexOf(String(logRow.UserId)) === -1) {
+        throw new ApiError('FORBIDDEN', 'That message is not yours to read.');
+      }
+    }
+  } else if (!leadId) {
+    // Not in the archive and no lead named: nothing to authorise against.
+    throw new ApiError('BAD_REQUEST',
+      'A leadId is required to read a message that is not in the archive.');
+  }
+
+  // Already archived in full? Serve it and skip the round trip entirely.
+  var cached = readMessageBody(messageId);
+  if (cached && cached.complete && cached.body) {
+    return { messageId: messageId, content: cached.body, complete: true };
+  }
+
+  // The folder id is REQUIRED by Zoho to address a message body. The caller
+  // rarely has it, so recover it from the archive rather than guessing '0'
+  // and getting an empty response.
+  var folderId = String(params.folderId || '');
+  if (!folderId && logRow) folderId = String(logRow.FolderId || '');
+
+  var box = openMailbox(actor.ID);
+  var cfg = getZohoConfig();
+
+  var content = fetchZohoMessageContent(box, cfg, folderId, messageId);
+  if (!content) {
+    // The message may have left the mailbox. Fall back to what was archived,
+    // and say so, rather than showing an empty panel.
+    if (cached && cached.body) {
+      return {
+        messageId: messageId, content: cached.body, complete: cached.complete,
+        note: 'This message is no longer in the mailbox. Showing the copy the ' +
+              'CRM kept.'
+      };
+    }
+    if (logRow) {
+      return {
+        messageId: messageId,
+        content: String(logRow.Summary || ''),
+        complete: false,
+        note: 'This message is no longer in the mailbox. Showing the summary ' +
+              'recorded when it was first seen.'
+      };
+    }
+    throw new ApiError('NOT_FOUND', 'That message could not be retrieved.');
+  }
+
+  // Keep it. The archive completes itself as people read older mail, and
+  // nobody pays for this fetch twice.
+  storeMessageBody(messageId, content);
+
+  return { messageId: messageId, content: content, complete: true };
+}
+
 /* ================================================================== *
  * Mailbox-wide sync and email analytics
  * ================================================================== */
 
 /** Pull the bare address out of a display name wrapping the address in angle brackets or a bare one. */
+/**
+ * Undo the HTML escaping Zoho applies to address headers.
+ *
+ * Stored values genuinely look like
+ *   &quot;Someone&quot;&lt;someone@example.com&gt;
+ * so a parser expecting literal quotes and angle brackets finds no address at
+ * all. That is not cosmetic: an address that fails to parse fails to match,
+ * and a row of real mail would be detached from its lead as "unrelated" on
+ * the strength of a formatting artefact.
+ */
+function decodeEntities(value) {
+  return String(value == null ? '' : value)
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');   // last: an escaped ampersand may encode the rest
+}
+
 function bareAddress(value) {
-  var s = String(value || '').trim();
+  var s = decodeEntities(value).trim();
   var angled = s.match(/<([^>]+)>/);
   if (angled) s = angled[1];
   var first = s.split(/[,;]/)[0];
-  return String(first || '').trim().toLowerCase();
+  s = String(first || '').trim().toLowerCase();
+
+  // A display name with no address ("Dhiraj T H") is not an address. Saying
+  // so explicitly stops it being compared as though it were one.
+  return s.indexOf('@') === -1 ? '' : s;
 }
 
 /**
@@ -548,82 +1021,341 @@ function leadIndexByEmail() {
  * backend does, and it runs on a free-tier quota, so it reads a page of recent
  * messages rather than the entire history and stores only what is new.
  */
-function syncMailbox(actor, payload) {
-  payload = payload || {};
-  if (!actor) throw new ApiError('UNAUTHENTICATED', 'Sign in first.');
+/* ---------------- where each mailbox got to last time ---------------- */
 
-  var limit = Number(payload.limit);
-  if (isNaN(limit) || limit < 1) limit = 50;
-  if (limit > MAX_MAILBOX_SYNC) limit = MAX_MAILBOX_SYNC;
+/**
+ * Sync bookmarks live in Script Properties, not in a sheet column.
+ *
+ * This is operational bookkeeping rather than business data: it describes the
+ * sync process, not the CRM's records. Keeping it out of the Users sheet means
+ * no schema migration, nothing to add by hand, and no risk of a bookmark
+ * colliding with a column somebody edits.
+ */
+function mailSyncStateKey(userId) {
+  return 'MAILSYNC_' + String(userId);
+}
 
-  var box = openMailbox(actor.ID);
-  var cfg = getZohoConfig();
+function readMailSyncState(userId) {
+  var raw = PropertiesService.getScriptProperties().getProperty(mailSyncStateKey(userId));
+  if (!raw) return { newestMessageId: '', lastSyncAt: '', lastError: '' };
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return { newestMessageId: '', lastSyncAt: '', lastError: '' };
+  }
+}
 
-  var url = cfg.mailHost + '/api/accounts/' + box.accountId +
-            '/messages/view?limit=' + limit + '&start=1';
-  var res = zohoFetch(url, {
-    headers: { Authorization: 'Zoho-oauthtoken ' + box.accessToken },
-    muteHttpExceptions: true
-  });
+function writeMailSyncState(userId, state) {
+  PropertiesService.getScriptProperties()
+    .setProperty(mailSyncStateKey(userId), JSON.stringify(state));
+}
 
-  var body = parseZohoJson(res, 'mailbox listing');
-  var messages = body.data || [];
-
-  var index = leadIndexByEmail();
+/**
+ * Work shared by every mailbox in one run.
+ *
+ * The EmailLog scan and the lead index are the same for all of them, so a run
+ * over six mailboxes reads each once instead of six times.
+ */
+function newSyncContext() {
   var existing = getRecordsRaw('EmailLog');
   var seen = {};
   for (var e = 0; e < existing.length; e++) seen[String(existing[e].MessageId)] = true;
+  return { seen: seen, leadIndex: leadIndexByEmail(), now: new Date().toISOString() };
+}
 
+/**
+ * Archive one person's mailbox. Works for ANY user id, not just the caller.
+ *
+ * Callable with someone else's id only from the scheduled job — every HTTP
+ * path passes actor.ID, so a request can still never read another person's
+ * mailbox.
+ *
+ * Incremental. Zoho returns newest-first, so the walk stops at the first
+ * message already in the archive: after the initial run each sync reads one
+ * page and usually writes nothing. The bookmark makes the common case cheaper
+ * still — if the newest message is the one we ended on last time, there is
+ * nothing new and it returns without touching the sheet at all.
+ */
+/**
+ * The folders worth archiving: what arrived, and what we sent.
+ *
+ * A listing is always scoped to one folder, and asking without one gives the
+ * INBOX — not the whole mailbox. Syncing only the default therefore collected
+ * inbound mail and none of the replies, which is the half a manager most needs
+ * to see. Drafts, Trash and Spam are deliberately excluded: an unsent draft is
+ * not correspondence, and filing spam against a lead is worse than missing it.
+ */
+function syncableFolders(box, cfg) {
+  var body;
+  try {
+    var res = zohoFetch(cfg.mailHost + '/api/accounts/' + box.accountId + '/folders', {
+      headers: { Authorization: 'Zoho-oauthtoken ' + box.accessToken },
+      muteHttpExceptions: true
+    });
+    body = parseZohoJson(res, 'folder listing');
+  } catch (err) {
+    // A token issued before ZohoMail.folders.READ was requested can read
+    // messages but not list folders, and answers 401 here. Failing the whole
+    // mailbox over that would stop archiving mail that was syncing perfectly
+    // well a moment ago — so fall back to the default listing, which is the
+    // Inbox, and say plainly what reconnecting would add.
+    return {
+      folders: [{ id: '', name: 'Inbox (default)' }],
+      degraded: 'This mailbox was connected before the CRM asked for folder ' +
+                'access, so only received mail can be archived. Reconnect it ' +
+                'from the dashboard to include sent mail.'
+    };
+  }
+
+  var all = body.data || [];
+  var want = { INBOX: true, SENT: true };
+  var out = [];
+
+  for (var i = 0; i < all.length; i++) {
+    var f = all[i];
+    var kind = String(f.folderType || f.folderName || '').toUpperCase();
+    if (want[kind]) out.push({ id: String(f.folderId), name: String(f.folderName || kind) });
+  }
+
+  // A mailbox that reports no folders we recognise still gets the default
+  // listing rather than being skipped entirely.
+  if (!out.length) out.push({ id: '', name: 'default' });
+  return { folders: out, degraded: '' };
+}
+
+function syncMailboxForUser(userId, ctx, limit) {
+  if (isNaN(limit) || limit < 1) limit = 50;
+  if (limit > MAX_MAILBOX_SYNC) limit = MAX_MAILBOX_SYNC;
+
+  var box = openMailbox(userId);
+  var cfg = getZohoConfig();
+  var state = readMailSyncState(userId);
+  var marks = state.folders || {};
+
+  var picked = syncableFolders(box, cfg);
+  var folders = picked.folders;
   var mine = String(box.email).toLowerCase();
-  var now = new Date().toISOString();
-  var stored = 0, matched = 0, unmatched = 0;
+  var stored = 0, matched = 0, unmatched = 0, scanned = 0, foldersUpToDate = 0;
 
-  for (var m = 0; m < messages.length; m++) {
-    var msg = messages[m];
-    var id = String(msg.messageId || '');
-    if (!id || seen[id]) continue;
+  for (var f = 0; f < folders.length; f++) {
+    var folder = folders[f];
 
-    var sender = bareAddress(msg.sender || msg.fromAddress);
-    var recipient = bareAddress(msg.toAddress);
-    var inbound = sender !== '' && sender !== mine;
-    // The counterparty is whoever is not us.
-    var other = inbound ? sender : recipient;
-
-    var lead = other ? index[other] : null;
-
-    appendRecordRaw('EmailLog', {
-      MessageId: id,
-      LeadId: lead ? String(lead.ID) : '',
-      LeadEmail: other,
-      UserId: actor.ID,
-      Direction: inbound ? 'in' : 'out',
-      Subject: String(msg.subject || '(No Subject)').slice(0, 500),
-      Summary: String(msg.summary || '').slice(0, 2000),
-      Sender: String(msg.sender || msg.fromAddress || ''),
-      ToAddress: String(msg.toAddress || ''),
-      SentAt: toIsoTimestamp(msg.receivedTime, now),
-      SyncedAt: now
+    var url = cfg.mailHost + '/api/accounts/' + box.accountId +
+              '/messages/view?limit=' + limit + '&start=1' +
+              (folder.id ? '&folderId=' + encodeURIComponent(folder.id) : '');
+    var res = zohoFetch(url, {
+      headers: { Authorization: 'Zoho-oauthtoken ' + box.accessToken },
+      muteHttpExceptions: true
     });
 
-    seen[id] = true;
-    stored++;
-    if (lead) matched++; else unmatched++;
+    var body = parseZohoJson(res, 'mailbox listing');
+    var messages = body.data || [];
+    // An empty folder has nothing to do, which is as up to date as it gets.
+    // Counted explicitly, because otherwise a mailbox with an empty Sent
+    // folder could never report itself finished and every run looked like it
+    // had found work to do.
+    if (!messages.length) {
+      foldersUpToDate++;
+      continue;
+    }
+
+    var newestId = String(messages[0].messageId || '');
+
+    // Nothing has arrived in this folder since last time.
+    if (newestId && newestId === String(marks[folder.id] || '')) {
+      foldersUpToDate++;
+      continue;
+    }
+
+    for (var m = 0; m < messages.length; m++) {
+      var msg = messages[m];
+      var id = String(msg.messageId || '');
+      if (!id) continue;
+      scanned++;
+
+      // Newest-first: the first message already held means every message after
+      // it is older and already held too.
+      if (ctx.seen[id]) break;
+
+      var sender = bareAddress(msg.sender || msg.fromAddress);
+      var recipient = bareAddress(msg.toAddress);
+      var inbound = sender !== '' && sender !== mine;
+      // The counterparty is whoever is not us.
+      var other = inbound ? sender : recipient;
+
+      var lead = other ? ctx.leadIndex[other] : null;
+
+      appendRecordRaw('EmailLog', {
+        MessageId: id,
+        LeadId: lead ? String(lead.ID) : '',
+        LeadEmail: other,
+        UserId: userId,
+        Direction: inbound ? 'in' : 'out',
+        Subject: String(msg.subject || '(No Subject)').slice(0, 500),
+        Summary: String(msg.summary || '').slice(0, 2000),
+        Sender: String(msg.sender || msg.fromAddress || ''),
+        ToAddress: String(msg.toAddress || ''),
+        SentAt: toIsoTimestamp(msg.receivedTime, ctx.now),
+        SyncedAt: ctx.now,
+        // Zoho addresses a body as folder + message, so without this the full
+        // text can never be fetched later.
+        FolderId: String(msg.folderId || folder.id || '')
+      });
+
+      ctx.seen[id] = true;
+      stored++;
+      if (lead) matched++; else unmatched++;
+
+      // A reply from a client is the one notification people actually need,
+      // and it is what puts incoming mail in the global activity feed.
+      //
+      // The per-lead archive path already wrote this; the scheduled sync did
+      // not — so mail that arrived while nobody had the lead open was filed
+      // silently and nobody was told. Dated when the message ARRIVED, not when
+      // the sync noticed it, or a quiet week would dump itself onto today.
+      if (inbound && lead) {
+        auditLog({
+          entityId: String(lead.ID), entityType: 'Lead', action: 'EMAIL_RECEIVED',
+          userId: userId,
+          contactMode: 'EMAIL',
+          occurredAt: toIsoTimestamp(msg.receivedTime, ctx.now),
+          details: 'Reply received from ' + other + ': ' +
+                   String(msg.subject || '(No Subject)').slice(0, 200),
+          metadata: { messageId: id }
+        });
+      }
+    }
+
+    if (newestId) marks[folder.id] = newestId;
   }
+
+  writeMailSyncState(userId, {
+    folders: marks, lastSyncAt: ctx.now, lastError: picked.degraded || ''
+  });
 
   if (stored > 0) {
     auditLog({
-      entityId: actor.ID, entityType: 'User', action: 'MAILBOX_SYNCED',
-      userId: actor.ID,
+      entityId: userId, entityType: 'User', action: 'MAILBOX_SYNCED',
+      userId: userId,
       details: stored + ' new message' + (stored === 1 ? '' : 's') + ' recorded — ' +
                matched + ' matched to a lead, ' + unmatched + ' with no matching lead.'
     });
   }
 
   return {
-    scanned: messages.length, stored: stored,
+    scanned: scanned, stored: stored,
     matchedToLead: matched, withoutLead: unmatched,
-    mailbox: box.email
+    mailbox: box.email,
+    folders: folders.length,
+    degraded: picked.degraded || '',
+    upToDate: foldersUpToDate === folders.length
   };
+}
+
+function syncMailbox(actor, payload) {
+  payload = payload || {};
+  if (!actor) throw new ApiError('UNAUTHENTICATED', 'Sign in first.');
+  // Always the caller's own mailbox, whatever the request says.
+  return syncMailboxForUser(actor.ID, newSyncContext(), Number(payload.limit));
+}
+
+/** Leave this much of the 6-minute execution budget unused, so the run ends tidily. */
+var MAIL_SYNC_TIME_BUDGET_MS = 4.5 * 60 * 1000;
+
+/**
+ * Archive EVERY linked mailbox. This is the scheduled job.
+ *
+ * Why it has to exist: a request only ever reads the CALLER's mailbox, which
+ * is what stops one person reading a colleague's inbox. The consequence was
+ * that mail somebody sent from their own Zoho account never reached the CRM at
+ * all unless they happened to open that lead — so a manager reviewing a lead
+ * saw a conversation with pieces missing, and could not tell that anything was
+ * missing.
+ *
+ * Running as a trigger, this is the script acting as itself rather than on
+ * behalf of a user, so reading every mailbox is legitimate. Nothing changes
+ * about who can READ the archive: getStoredEmails still scopes by which leads
+ * you may see.
+ *
+ * One broken mailbox never stops the rest — a revoked token is recorded
+ * against that user and the loop continues.
+ */
+function syncAllMailboxes(opts) {
+  opts = opts || {};
+  var started = Date.now();
+  var limit = Number(opts.limit);
+
+  var users = getRecordsRaw('Users');
+  var ctx = newSyncContext();
+
+  var report = {
+    startedAt: ctx.now, mailboxes: 0, skipped: 0,
+    stored: 0, matchedToLead: 0, withoutLead: 0,
+    upToDate: 0, failed: [], inboxOnly: [], ranOutOfTime: false
+  };
+
+  for (var i = 0; i < users.length; i++) {
+    var u = users[i];
+    if (String(u.Status || '') !== 'Active') { report.skipped++; continue; }
+    if (!String(u.ZohoRefreshToken || '')) { report.skipped++; continue; }
+
+    // Stop before Apps Script kills the run mid-write. Whatever is left is
+    // picked up on the next tick, and the bookmarks mean nothing is redone.
+    if (Date.now() - started > MAIL_SYNC_TIME_BUDGET_MS) {
+      report.ranOutOfTime = true;
+      break;
+    }
+
+    try {
+      var r = syncMailboxForUser(String(u.ID), ctx, limit);
+      report.mailboxes++;
+      report.stored += r.stored;
+      report.matchedToLead += r.matchedToLead;
+      report.withoutLead += r.withoutLead;
+      if (r.upToDate) report.upToDate++;
+      // Syncing, but Inbox only — sent mail is still missing for this person.
+      if (r.degraded) report.inboxOnly.push(String(u.Username || u.ID));
+    } catch (err) {
+      var why = err && err.message ? err.message : String(err);
+      report.failed.push({ userId: String(u.ID), username: String(u.Username || ''), reason: why });
+      writeMailSyncState(String(u.ID), {
+        newestMessageId: readMailSyncState(String(u.ID)).newestMessageId || '',
+        lastSyncAt: ctx.now,
+        lastError: why
+      });
+    }
+  }
+
+  Logger.log('syncAllMailboxes: ' + JSON.stringify(report));
+
+  if (report.stored > 0 || report.failed.length) {
+    auditLog({
+      entityId: 'SYSTEM', entityType: 'System', action: 'MAILBOX_SYNC_ALL',
+      userId: 'SYSTEM',
+      details: report.mailboxes + ' mailbox(es) synced, ' + report.stored +
+               ' new message(s) recorded' +
+               (report.failed.length ? ', ' + report.failed.length + ' needing reconnection' : '') + '.',
+      metadata: report
+    });
+  }
+
+  return report;
+}
+
+/**
+ * Super Admin's manual "sync everyone now".
+ *
+ * Same job the trigger runs. Restricted to SUPER_ADMIN because it reads every
+ * mailbox — and even then it only WRITES the archive; it returns counts, never
+ * message contents, so it is not a way to read a colleague's mail.
+ */
+function syncAllMailboxesAction(actor, payload) {
+  payload = payload || {};
+  if (!actor) throw new ApiError('UNAUTHENTICATED', 'Sign in first.');
+  if (String(actor.role) !== 'SUPER_ADMIN') {
+    throw new ApiError('FORBIDDEN', 'Only a Super Admin may sync every mailbox.');
+  }
+  return syncAllMailboxes({ limit: payload.limit });
 }
 
 /**

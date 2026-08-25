@@ -83,7 +83,11 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
         items.push({
           id: `stale-${lead.id}`,
           title: `${lead.name}: follow-up over 24h overdue`,
-          subtitle: 'Log what happened, or set a new date and say why.',
+          // Moving the date now requires a reason, so this says what will
+          // actually be asked rather than leaving it as a suggestion.
+          subtitle: lead.followUpDelayReason
+            ? `Explained: ${lead.followUpDelayReason}`
+            : 'Log what happened, or set a new date — you will be asked why.',
           type: 'followup_stale',
           link: `/leads/${lead.id}`,
         });

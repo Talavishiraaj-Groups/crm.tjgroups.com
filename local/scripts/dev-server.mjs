@@ -35,6 +35,21 @@ const ENFORCEMENT = argOf('enforcement', 'on');
 const DATA_FILE = argOf('data', null);
 const ITERATIONS = argOf('iterations', '200'); // keep local logins fast
 
+/**
+ * The backend's clock. Defaults to now so it agrees with the browser;
+ * `--now 2026-01-05T09:00:00Z` pins it to reproduce a date-specific bug.
+ */
+const START_TIME = (() => {
+  const raw = argOf('now', null);
+  if (!raw) return Date.now();
+  const parsed = Date.parse(raw);
+  if (isNaN(parsed)) {
+    console.error(`\n  --now "${raw}" is not a date I can parse.\n`);
+    process.exit(1);
+  }
+  return parsed;
+})();
+
 /* ---------------- boot the backend ---------------- */
 
 let be;
@@ -62,6 +77,15 @@ be = loadBackend({
     ENVIRONMENT: 'test',
   },
   zoho: { clientId: 'LOCAL_TEST_CLIENT_ID', clientSecret: 'LOCAL_TEST_CLIENT_SECRET' },
+  // Run on the REAL clock, unlike the test harness.
+  //
+  // The sandbox otherwise freezes at the fixture date, so the backend thought
+  // it was January while the browser knew it was not. Anything that compares a
+  // date against "now" then disagreed with what was on screen: overdue
+  // follow-ups looked scheduled, "due today" never matched, and a date picked
+  // in the UI arrived months in the future. Tests still use the frozen clock —
+  // they need determinism; a dev server needs to agree with the browser.
+  startTime: START_TIME,
 });
 
 be.call('setupCRMDatabase');

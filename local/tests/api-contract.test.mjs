@@ -176,11 +176,13 @@ test('CONTRACT-9: every editable lead field actually reaches the server', () => 
   // the value silently never changes. `email` and `phone` were both absent.
   const src = fs.readFileSync(path.join(ROOT, 'src', 'api', 'services.ts'), 'utf8');
 
-  const updateBlock = src.slice(
-    src.indexOf('update: async (id: string, payload: Partial<Lead>)'),
-    src.indexOf("await fetchAPI('updateLead'")
-  );
-  assert.ok(updateBlock.length > 0, 'found the lead update mapper');
+  // Anchored on `Partial<Lead>` rather than the whole signature: the point of
+  // this test is which fields the mapper carries, and pinning it to one exact
+  // line made it fail the moment the signature gained a parameter.
+  const start = src.indexOf('payload: Partial<Lead>');
+  const end = src.indexOf("await fetchAPI('updateLead'", start);
+  assert.ok(start !== -1 && end > start, 'found the lead update mapper');
+  const updateBlock = src.slice(start, end);
 
   const editable = [
     ['name', 'Name'],
@@ -252,4 +254,97 @@ test('CONTRACT-11: a phone starting with + reads back without an apostrophe', ()
   const storedEvil = be.rows('Leads').find((l) => l.ID === evil.data.ID);
   assert.ok(String(storedEvil.Notes).startsWith("'="),
     'the formula guard must still apply in the sheet');
+});
+
+/* ------------------------------------------------------------------ *
+ * Transport safety: retries must never repeat a write
+ * ------------------------------------------------------------------ */
+
+test('CONTRACT-12: only reads are retried, so a lost write is never repeated', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'api', 'services.ts'), 'utf8');
+
+  // A response that never arrives does NOT mean the request never ran. Apps
+  // Script may well have applied the write and lost the reply, so sending it
+  // again would create a second lead, a second commission, a second payout.
+  // The retry paths are therefore gated on isSafeToRetry.
+  assert.ok(/function isSafeToRetry/.test(src),
+    'the retry guard is gone — every failed request would be retried, writes included');
+
+  const guard = src.slice(
+    src.indexOf('function isSafeToRetry'),
+    src.indexOf('}', src.indexOf('function isSafeToRetry')) + 1
+  );
+  assert.ok(/\^get/.test(guard) && /'batch'/.test(guard),
+    'the guard no longer restricts retries to reads');
+
+  // Every retry call site must be behind the guard.
+  const retryCalls = src.split('\n')
+    .map((line, i) => ({ line, i }))
+    .filter(({ line }) => /return doFetch<T>\(action, method, payload, params, attempt \+ 1\)/.test(line));
+
+  assert.ok(retryCalls.length >= 2, 'expected the network and unreadable-response retries');
+
+  for (const { i } of retryCalls) {
+    // Look back a few lines for the guard that admits this retry.
+    const before = src.split('\n').slice(Math.max(0, i - 6), i).join('\n');
+    assert.ok(/isSafeToRetry\(action\)/.test(before),
+      `a retry at line ${i + 1} is not gated by isSafeToRetry — writes could be duplicated`);
+  }
+});
+
+test('CONTRACT-13: a lost read backs off before retrying, and gives up', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'api', 'services.ts'), 'utf8');
+
+  // The failure this covers was intermittent, landed on a different action
+  // each time, and cleared itself when the user navigated away and back —
+  // i.e. it was transient, and re-sending is the correct answer. Retrying
+  // immediately would just re-enter whatever transient condition caused it,
+  // so each attempt waits a little longer than the last.
+  assert.ok(/setTimeout\(r, 400 \* \(attempt \+ 1\)\)/.test(src),
+    'the backoff before a retry is gone — retries would hammer the backend');
+
+  // Bounded: an endpoint that is genuinely down must surface as an error
+  // rather than looping.
+  assert.ok(/attempt < 2/.test(src),
+    'the retry is no longer bounded — a real outage would retry forever');
+
+  // And the user is told what actually came back, not just "unreadable".
+  assert.ok(/exceeded maximum execution time/i.test(src) && /first 400 bytes/.test(src),
+    'the diagnostic that classifies a non-JSON response is gone');
+});
+
+test('CONTRACT-14: the UI gates deletion, not editing', () => {
+  const be = buildScenario();
+  const src = fs.readFileSync(
+    path.join(ROOT, 'src', 'pages', 'LeadDetail.tsx'), 'utf8');
+
+  // The server decides permissions; the buttons only have to agree with it.
+  // They did not: the backend was opened up so anyone working a lead could
+  // correct its details, but EDIT LEAD stayed behind `isManager` — so a rep
+  // had the right and no way to exercise it.
+  const editIdx = src.indexOf('EDIT LEAD');
+  const deleteIdx = src.indexOf('<Trash2');
+  assert.ok(editIdx !== -1 && deleteIdx !== -1, 'found both buttons');
+
+  // Delete must sit inside an isManager guard; Edit must not.
+  const beforeDelete = src.slice(Math.max(0, deleteIdx - 400), deleteIdx);
+  assert.match(beforeDelete, /isManager\s*&&/,
+    'the DELETE button is no longer restricted to managers');
+
+  const beforeEdit = src.slice(Math.max(0, editIdx - 400), editIdx);
+  assert.ok(!/isManager\s*&&\s*\(\s*$/.test(beforeEdit.trimEnd()),
+    'EDIT LEAD is gated to managers again, contradicting the server');
+
+  // And the server genuinely permits it, so the button is not a lie.
+  const token = loginAs(be, ID.repAlpha1);
+  const res = authPost(be, token, 'updateLead', {
+    id: ID.leadAlphaNew, Name: 'Rep Corrected This',
+  });
+  assert.equal(res.status, 'success',
+    'the UI offers an edit the server refuses');
+
+  const del = authPost(be, token, 'deleteLead', {
+    leadId: ID.leadAlphaNew, reason: 'nope',
+  });
+  assert.equal(del.code, 'FORBIDDEN', 'deletion escaped the manager check');
 });

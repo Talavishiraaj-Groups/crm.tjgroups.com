@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Calendar, ArrowRight } from 'lucide-react';
+import { Calendar, ArrowRight, AlertCircle } from 'lucide-react';
 import { api } from '../../api/services';
 import { ApiError } from '../../api/errors';
+import { FollowUpDelayPrompt } from './FollowUpDelayPrompt';
 import type { Lead } from '../../types';
 
 interface Props {
@@ -24,6 +25,9 @@ interface Props {
 export const FollowUpPanel: React.FC<Props> = ({ lead, onDone, maxDate }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Set when the server refuses to move a stale date without a reason. */
+  const [delayPrompt, setDelayPrompt] =
+    useState<{ date: string; message: string; error?: string } | null>(null);
 
   // Read the clock once on mount. Calling Date.now() during render would let
   // the badge change simply because React re-rendered.
@@ -39,21 +43,31 @@ export const FollowUpPanel: React.FC<Props> = ({ lead, onDone, maxDate }) => {
     UNSET: 'bg-gray-100 text-gray-500 border-gray-200',
   }[state];
 
-  const run = async (fn: () => Promise<void>) => {
+  /**
+   * Move the date, asking why if the server says an explanation is owed.
+   *
+   * Staleness is decided in exactly one place — the backend — and this reacts
+   * to its refusal. Working it out here as well would give two answers that
+   * could drift apart, and only one of them governs what is actually stored.
+   */
+  const schedule = async (date: string, delayReason?: string) => {
     setBusy(true);
     setError(null);
     try {
-      await fn();
+      await api.leads.update(lead.id, { nextFollowUp: date }, { delayReason });
+      setDelayPrompt(null);
       onDone();
     } catch (err) {
-      setError(err instanceof ApiError ? err.displayMessage : 'Could not save.');
+      if (err instanceof ApiError && err.code === 'FOLLOWUP_REASON_REQUIRED') {
+        setDelayPrompt({ date, message: err.displayMessage });
+      } else {
+        setDelayPrompt(prev => (prev ? { ...prev, error: 'That did not save.' } : null));
+        setError(err instanceof ApiError ? err.displayMessage : 'Could not save.');
+      }
     } finally {
       setBusy(false);
     }
   };
-
-  const schedule = (date: string) =>
-    run(async () => { await api.leads.update(lead.id, { nextFollowUp: date }); });
 
   const scheduleInDays = (days: number) => {
     const d = new Date();
@@ -75,6 +89,29 @@ export const FollowUpPanel: React.FC<Props> = ({ lead, onDone, maxDate }) => {
 
         {error && (
           <p role="alert" className="mb-3 text-[11px] font-bold text-red-600">{error}</p>
+        )}
+
+        {/*
+          The last explanation given for letting this follow-up slip. Shown
+          where the date is, because the date on its own reads as a plan —
+          without this, a lead that has been pushed four times looks exactly
+          like one scheduled once.
+        */}
+        {lead.followUpDelayReason && (
+          <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-[6px] flex gap-2">
+            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-px" />
+            <div className="min-w-0">
+              <p className="text-[9px] font-black text-amber-700 uppercase tracking-widest mb-1">
+                Last delay explained
+                {lead.followUpDelayReasonAt
+                  ? ` · ${lead.followUpDelayReasonAt.split('T')[0]}`
+                  : ''}
+              </p>
+              <p className="text-[11px] text-[#161616]/70 leading-relaxed break-words">
+                {lead.followUpDelayReason}
+              </p>
+            </div>
+          </div>
         )}
 
         <div className="p-3 bg-[#F9F9F9] border border-[#DFDFDF] rounded-[6px] flex items-center justify-between gap-3">
@@ -120,6 +157,16 @@ export const FollowUpPanel: React.FC<Props> = ({ lead, onDone, maxDate }) => {
           </span>
         </p>
       </div>
+
+      {delayPrompt && (
+        <FollowUpDelayPrompt
+          message={delayPrompt.message}
+          error={delayPrompt.error}
+          busy={busy}
+          onCancel={() => setDelayPrompt(null)}
+          onSubmit={(reason) => schedule(delayPrompt.date, reason)}
+        />
+      )}
     </div>
   );
 };

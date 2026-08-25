@@ -1228,3 +1228,53 @@ test('APPSCRIPT-16: enforcement set by hand actually rejects an anonymous call',
   }))._raw);
   assert.equal(authed.status, 'success', 'a signed-in user was blocked');
 });
+
+test('APPSCRIPT-17: a slow legacy hash is upgraded on the next sign-in', () => {
+  const be = buildScenario();
+  const user = be.rows('Users').find((u) => u.Role === 'SUPER_ADMIN');
+
+  // Hashed when the cost was high.
+  be.setProp('PASSWORD_ITERATIONS', '750');
+  be.call('setUserPassword', user.ID, 'RealWorldPass99', { mustChange: false });
+  assert.equal(Number(be.call('getRecordByIdRaw', 'Users', user.ID).PasswordIterations), 750);
+
+  // The organisation lowers the cost. Existing accounts keep paying the old
+  // one, because the count travels with the hash.
+  be.setProp('PASSWORD_ITERATIONS', '150');
+
+  const login = JSON.parse(be.postRaw(JSON.stringify({
+    action: 'login', payload: { username: user.Username, password: 'RealWorldPass99' },
+  }))._raw);
+  assert.equal(login.status, 'success', `login failed: ${login.message}`);
+
+  const after = be.call('getRecordByIdRaw', 'Users', user.ID);
+  assert.equal(Number(after.PasswordIterations), 150,
+    'the hash was not upgraded, so this account stays slow forever');
+
+  // And the same password still works at the new cost.
+  const again = JSON.parse(be.postRaw(JSON.stringify({
+    action: 'login', payload: { username: user.Username, password: 'RealWorldPass99' },
+  }))._raw);
+  assert.equal(again.status, 'success', 'the re-hash broke the password');
+
+  const wrong = JSON.parse(be.postRaw(JSON.stringify({
+    action: 'login', payload: { username: user.Username, password: 'NotThePassword1' },
+  }))._raw);
+  assert.equal(wrong.status, 'error', 'a wrong password was accepted after re-hashing');
+});
+
+test('APPSCRIPT-18: an unchanged cost setting does not rewrite the hash', () => {
+  const be = buildScenario();
+  const user = be.rows('Users').find((u) => u.Role === 'SUPER_ADMIN');
+  be.call('setUserPassword', user.ID, 'RealWorldPass99', { mustChange: false });
+
+  const before = be.call('getRecordByIdRaw', 'Users', user.ID);
+
+  be.postRaw(JSON.stringify({
+    action: 'login', payload: { username: user.Username, password: 'RealWorldPass99' },
+  }));
+
+  const after = be.call('getRecordByIdRaw', 'Users', user.ID);
+  assert.equal(after.PasswordHash, before.PasswordHash,
+    'the hash was rewritten on every login for no reason');
+});

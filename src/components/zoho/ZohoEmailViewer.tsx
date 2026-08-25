@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { ZohoEmailItem, Log } from '../../types';
+import { api } from '../../api/services';
+import { ApiError } from '../../api/errors';
 import { decodeHtmlEntities, stripHtmlTags, isHtmlContent } from '../../utils/htmlUtils';
 import { 
   Mail, Search, RefreshCw, ChevronDown, ChevronUp, 
@@ -22,6 +24,8 @@ function formatAddress(value?: string): string {
 }
 interface ZohoEmailViewerProps {
   emails: ZohoEmailItem[];
+  /** Needed to authorise fetching a message body. */
+  leadId: string;
   leadEmail: string;
   leadName: string;
   crmLogs?: Log[];
@@ -31,6 +35,7 @@ interface ZohoEmailViewerProps {
 
 export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
   emails,
+  leadId,
   leadEmail,
   leadName,
   crmLogs = [],
@@ -39,6 +44,49 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
 }) => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [selectedEmail, setSelectedEmail] = useState<ZohoEmailItem | null>(null);
+
+  /**
+   * Full bodies fetched on demand, keyed by message id.
+   *
+   * Neither a search result nor an archived row carries the whole message —
+   * both hold Zoho's summary, which is truncated. "Full view" was therefore
+   * showing a cut-off paragraph and calling it the full text. The real body
+   * costs a Zoho round trip, so it is fetched when a message is opened and
+   * then remembered.
+   */
+  const [bodies, setBodies] = useState<Record<string, { text: string; complete: boolean; note?: string }>>({});
+  const [loadingBody, setLoadingBody] = useState<string | null>(null);
+
+  const loadFullBody = useCallback(async (item: ZohoEmailItem) => {
+    const key = item.messageId || item.id;
+    if (!key || bodies[key] || loadingBody === key) return;
+    setLoadingBody(key);
+    try {
+      const res = await api.zoho.getEmailContent(key, { leadId });
+      setBodies((prev) => ({
+        ...prev,
+        [key]: { text: res.content, complete: res.complete, note: res.note },
+      }));
+    } catch (err) {
+      // Keep the summary on screen — it is better than nothing — but record
+      // that this is NOT the full message. Silently showing a truncated
+      // preview as though it were the whole email is the actual bug: the
+      // reader has no way to know they are missing the end of it.
+      setBodies((prev) => ({
+        ...prev,
+        [key]: {
+          text: '',
+          complete: false,
+          note: err instanceof ApiError && err.code === 'UNKNOWN_ACTION'
+            ? 'The backend does not support loading full messages yet. Deploy ' +
+              'a new Apps Script version to enable it.'
+            : 'The full message could not be loaded from the mailbox.',
+        },
+      }));
+    } finally {
+      setLoadingBody(null);
+    }
+  }, [bodies, loadingBody, leadId]);
   const [modalTab, setModalTab] = useState<'preview' | 'text'>('preview');
   const [fontSize, setFontSize] = useState<'normal' | 'large'>('normal');
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,6 +116,18 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
    * and cross-referencing with recorded CRM logs if Zoho returned only summary.
    */
   const getResolvedFullBody = (item: ZohoEmailItem): { body: string; isFromLog: boolean } => {
+    // A body fetched from the mailbox wins over everything else: the other
+    // sources are Zoho's truncated summary.
+    const fetched = bodies[item.messageId || item.id];
+    if (fetched && fetched.complete && fetched.text) {
+      return { body: decodeHtmlEntities(fetched.text), isFromLog: false };
+    }
+    // An INCOMPLETE result is still better than the list summary if it is
+    // longer, but it must not be treated as the whole message.
+    if (fetched && fetched.text && fetched.text.length > (item.content || '').length) {
+      return { body: decodeHtmlEntities(fetched.text), isFromLog: false };
+    }
+
     let body = item.content || item.summary || '';
     let isFromLog = false;
 
@@ -250,7 +310,7 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
             const isExpanded = expandedIds.has(item.id);
             const isIncoming = item.direction === 'in';
             const decodedSubject = decodeHtmlEntities(item.subject || '(No Subject)');
-            const { body: resolvedBody, isFromLog } = getResolvedFullBody(item);
+            const { body: resolvedBody } = getResolvedFullBody(item);
             const plainTextFull = stripHtmlTags(resolvedBody);
             const hasRichHtml = isHtmlContent(resolvedBody);
 
@@ -289,7 +349,7 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                         {item.stored ? 'Saved in CRM' : 'Zoho Mail'}
                       </span>
 
-                      {isFromLog && (
+                      {bodies[item.messageId || item.id]?.complete && (
                         <span className="text-[8px] font-black bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-[3px] uppercase tracking-wider flex items-center gap-1">
                           <CheckCircle2 className="w-2.5 h-2.5" /> Full Body Synced
                         </span>
@@ -337,7 +397,7 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                   {/* Card Footer Actions */}
                   <div className="px-4 py-2.5 bg-[#F9F9F9] border-t border-[#DFDFDF] flex items-center justify-between text-xs">
                     <button
-                      onClick={() => toggleExpand(item.id)}
+                      onClick={() => { toggleExpand(item.id); loadFullBody(item); }}
                       className="flex items-center gap-1.5 text-[10px] font-black text-[#161616]/60 hover:text-[#161616] uppercase tracking-wider cursor-pointer transition-colors"
                     >
                       {isExpanded ? (
@@ -351,6 +411,7 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                       onClick={() => {
                         setSelectedEmail(item);
                         setModalTab(hasRichHtml ? 'preview' : 'text');
+                        loadFullBody(item);
                       }}
                       className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#161616] hover:bg-[#161616]/90 text-white rounded-[6px] text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shadow-sm"
                     >
@@ -366,7 +427,7 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
 
       {/* FULL END-TO-END EMAIL VIEW MODAL */}
       {selectedEmail && (() => {
-        const { body: resolvedBody, isFromLog } = getResolvedFullBody(selectedEmail);
+        const { body: resolvedBody } = getResolvedFullBody(selectedEmail);
         const decodedSubject = decodeHtmlEntities(selectedEmail.subject || '(No Subject)');
         const plainTextFull = stripHtmlTags(resolvedBody);
         const hasRichHtml = isHtmlContent(resolvedBody);
@@ -385,7 +446,7 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                       <span className="text-[10px] font-black uppercase tracking-widest text-white/40">
                         Zoho Email Full End-to-End View
                       </span>
-                      {isFromLog && (
+                      {bodies[selectedEmail.messageId || selectedEmail.id]?.complete && (
                         <span className="text-[8px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.5 rounded uppercase tracking-wider">
                           Full Body Verified
                         </span>
@@ -505,9 +566,34 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
 
               {/* Modal Footer */}
               <div className="px-6 py-3.5 bg-[#F9F9F9] border-t border-[#DFDFDF] flex justify-between items-center shrink-0">
-                <span className="text-[10px] font-mono text-[#161616]/40">
-                  Total Length: {plainTextFull.length} Characters
-                </span>
+                {(() => {
+                  const key = selectedEmail.messageId || selectedEmail.id;
+                  const loaded = bodies[key];
+                  if (loadingBody === key) {
+                    return (
+                      <span className="text-[10px] font-bold text-[#161616]/50">
+                        Loading the full message…
+                      </span>
+                    );
+                  }
+                  // "Full message" is a claim, and it was being made whenever
+                  // any text existed — including a 249-character summary.
+                  // Only say it when the backend confirmed the body is whole.
+                  if (loaded && loaded.complete && loaded.text) {
+                    return (
+                      <span className="text-[10px] font-mono text-[#161616]/40">
+                        Full message · {plainTextFull.length} characters
+                      </span>
+                    );
+                  }
+                  // No full body: say so rather than implying this is all of it.
+                  return (
+                    <span className="text-[10px] font-bold text-amber-700">
+                      Preview only — this is the start of the message, not all of it
+                      {loaded && loaded.note ? `. ${loaded.note}` : '.'}
+                    </span>
+                  );
+                })()}
                 <button
                   onClick={() => setSelectedEmail(null)}
                   className="px-6 py-2.5 bg-[#161616] text-white rounded-[6px] text-xs font-bold uppercase tracking-wider hover:opacity-90 transition-all cursor-pointer shadow-md"

@@ -88,11 +88,18 @@ export const InsightsPage: React.FC = () => {
       // wherever in the world they are.
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-      setProductivity(await api.reports.productivity<ProductivityReport>(days, tz));
+      // One round trip, not two. These were sequential awaits, so a Super
+      // Admin paid the full Apps Script latency twice over — and that latency
+      // is ~2.5s per call on the free tier however little work the request
+      // does. Neither report depends on the other, so there was never a reason
+      // to wait for the first before asking for the second.
+      const [prod, analytics] = await Promise.all([
+        api.reports.productivity<ProductivityReport>(days, tz),
+        isSuperAdmin ? api.reports.analytics<AnalyticsReport>(days) : Promise.resolve(null),
+      ]);
 
-      if (isSuperAdmin) {
-        setAnalytics(await api.reports.analytics<AnalyticsReport>(days));
-      }
+      setProductivity(prod);
+      if (analytics) setAnalytics(analytics);
     } catch (err) {
       setError(err instanceof ApiError ? err.displayMessage : 'Could not load reports.');
     } finally {

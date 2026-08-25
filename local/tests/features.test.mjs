@@ -1402,20 +1402,34 @@ test('RESEARCH-1: findings are stored and stamped with who wrote them', () => {
   assert.ok(entry, 'the history distinguishes a research edit from any other edit');
 });
 
-test('RESEARCH-2: a rep may write research on their own lead but not rename the company', () => {
+test('RESEARCH-2: a rep may edit their own lead, including its identity', () => {
   const be = buildScenario();
   const token = loginAs(be, ID.repAlpha1);
 
+  // Name / Email / Phone / Linkedin used to be manager-only. The person who
+  // discovers a wrong address is the rep working the lead, and making them ask
+  // a manager to fix a typo just leaves the record wrong. Editing is
+  // recoverable and fully audited; DELETION is the irreversible act, and that
+  // is still managers only — asserted below.
   const res = authPost(be, token, 'updateLead', {
     id: ID.leadAlphaNew,
     ResearchFindings: 'Hiring aggressively.',
-    Name: 'Renamed By A Rep',
+    Name: 'Corrected Company Name',
+    Email: 'corrected@northwind.test',
   });
   assert.equal(res.status, 'success', res.message);
 
   const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
   assert.equal(lead.ResearchFindings, 'Hiring aggressively.');
-  assert.notEqual(lead.Name, 'Renamed By A Rep', 'identity is still manager-only');
+  assert.equal(lead.Name, 'Corrected Company Name', 'a rep still cannot fix a typo');
+  assert.equal(lead.Email, 'corrected@northwind.test');
+
+  // The line that actually matters: editing is open, deleting is not.
+  const del = authPost(be, token, 'deleteLead', {
+    leadId: ID.leadAlphaNew, reason: 'should not be permitted',
+  });
+  assert.equal(del.status, 'error', 'a rep was able to delete a lead');
+  assert.equal(del.code, 'FORBIDDEN');
 });
 
 test('RESEARCH-3: the client cannot forge who last revised the research', () => {
@@ -1914,4 +1928,898 @@ test('MAIL-17: the search does not depend on one spelling of the sender key', ()
     'the documented sender key was never tried');
   assert.ok(keys.some((u) => u.indexOf('to:') !== -1),
     'the recipient key was never tried');
+});
+
+test('MAIL-18: a lead with no correspondence shows no email', () => {
+  const be = buildScenario();
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  // A busy mailbox full of threads that have NOTHING to do with this lead,
+  // including a conversation the user had with themselves.
+  for (let i = 0; i < 8; i++) {
+    be.zoho.addMessage(acct.accountId, {
+      subject: `Internal thread ${i}`,
+      sender: 'rep@tjgroups.test', toAddress: 'rep@tjgroups.test',
+    });
+  }
+  be.zoho.addMessage(acct.accountId, {
+    subject: 'A colleague', sender: 'someone@tjgroups.test',
+    toAddress: 'rep@tjgroups.test',
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const res = authGet(be, token, 'getZohoEmails', {
+    leadEmail: 'nobody@unrelated.test', leadId: ID.leadAlphaNew,
+  });
+
+  assert.equal(res.status, 'success', res.message);
+  assert.equal(res.data.length, 0,
+    `a lead with no correspondence was shown ${res.data.length} unrelated ` +
+    'messages. Wrong data on a lead page gets acted on.');
+
+  // And nothing was archived against the lead either.
+  assert.equal(be.rows('EmailLog').filter((r) => String(r.ID || '')).length, 0,
+    'unrelated mail was written into the lead archive');
+});
+
+test('MAIL-19: genuine correspondence still comes through', () => {
+  const be = buildScenario();
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  be.zoho.addMessage(acct.accountId, {
+    subject: 'Noise', sender: 'rep@tjgroups.test', toAddress: 'rep@tjgroups.test',
+  });
+  be.zoho.addMessage(acct.accountId, {
+    subject: 'Our proposal', sender: 'rep@tjgroups.test',
+    toAddress: 'buyer@northwind.test',
+  });
+  be.zoho.addMessage(acct.accountId, {
+    subject: 'Re: Our proposal', sender: 'buyer@northwind.test',
+    toAddress: 'rep@tjgroups.test',
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const res = authGet(be, token, 'getZohoEmails', {
+    leadEmail: 'buyer@northwind.test', leadId: ID.leadAlphaNew,
+  });
+
+  assert.equal(res.data.length, 2, 'both halves of the real thread, and only those');
+  assert.ok(res.data.some((m) => m.direction === 'in'), 'the reply is missing');
+  assert.ok(res.data.some((m) => m.direction === 'out'), 'our message is missing');
+  assert.ok(!res.data.some((m) => m.subject === 'Noise'), 'unrelated mail leaked in');
+});
+
+test('MAIL-20: a similar-looking address is not treated as the same person', () => {
+  const be = buildScenario();
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  // alex@ vs alexs@ — one character apart, different companies.
+  be.zoho.addMessage(acct.accountId, {
+    subject: 'For the other Alex', sender: 'alex@unitedtllc.com',
+    toAddress: 'rep@tjgroups.test',
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const res = authGet(be, token, 'getZohoEmails', {
+    leadEmail: 'alexs@unitedtllc.com', leadId: ID.leadAlphaNew,
+  });
+
+  assert.equal(res.data.length, 0,
+    'a substring match put one person’s mail on another person’s lead');
+});
+
+test('MAIL-21: the archive stores the real body, not the truncated summary', () => {
+  const be = buildScenario();
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  const fullBody = 'Dear team, ' + 'the complete message body. '.repeat(60) + 'Regards.';
+  be.zoho.addMessage(acct.accountId, {
+    subject: 'A long one', sender: 'buyer@northwind.test',
+    toAddress: 'rep@tjgroups.test',
+    summary: 'Dear team, the complete message body. the complete mess',
+    content: fullBody,
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  authGet(be, token, 'getZohoEmails', {
+    leadEmail: 'buyer@northwind.test', leadId: ID.leadAlphaNew,
+  });
+
+  const row = be.rows('EmailLog').filter((r) => String(r.ID || ''))[0];
+  assert.ok(row, 'nothing archived');
+
+  // Bodies live in their own sheet, so listing a conversation never has to
+  // read them.
+  assert.ok(!('Body' in row) || !String(row.Body || ''),
+    'the body is stored on EmailLog, which is read in full on every page load');
+
+  const body = be.call('readMessageBody', row.MessageId);
+  assert.ok(body, 'the body was not archived at all');
+  assert.equal(body.body, fullBody,
+    'the archive kept the truncated summary instead of the real message');
+  assert.ok(body.complete, 'the body should be marked complete');
+
+  // And it is readable without touching Zoho.
+  const callsBefore = be.zoho.callCount;
+  const fetched = authPost(be, token, 'getEmailContent',
+    { messageId: row.MessageId, leadId: ID.leadAlphaNew });
+  assert.equal(fetched.data.content, fullBody);
+  assert.equal(be.zoho.callCount, callsBefore, 'it went back to Zoho unnecessarily');
+});
+
+test('MAIL-22: opening an older message fills the archive in, once', () => {
+  const be = buildScenario();
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  const id = be.zoho.addMessage(acct.accountId, {
+    subject: 'Older', sender: 'buyer@northwind.test', toAddress: 'rep@tjgroups.test',
+    summary: 'trunc', content: 'THE WHOLE MESSAGE',
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  authGet(be, token, 'getZohoEmails', {
+    leadEmail: 'buyer@northwind.test', leadId: ID.leadAlphaNew,
+  });
+
+  // Simulate a message archived before bodies were stored: drop its body row.
+  const bodyRow = be.rows('EmailBodies').find((r) => String(r.MessageId) === id);
+  if (bodyRow) be.call('deleteRecordRaw', 'EmailBodies', bodyRow.ID);
+
+  const first = authPost(be, token, 'getEmailContent', { messageId: id, leadId: ID.leadAlphaNew });
+  assert.equal(first.status, 'success', first.message);
+  assert.equal(first.data.content, 'THE WHOLE MESSAGE');
+
+  const after = be.call('readMessageBody', id);
+  assert.ok(after, 'the body was not written back');
+  assert.equal(after.body, 'THE WHOLE MESSAGE', 'the body was not written back');
+
+  // Second read is served from the archive, with no Zoho call.
+  const callsBefore = be.zoho.callCount;
+  const second = authPost(be, token, 'getEmailContent', { messageId: id, leadId: ID.leadAlphaNew });
+  assert.equal(second.data.content, 'THE WHOLE MESSAGE');
+  assert.equal(be.zoho.callCount, callsBefore,
+    'the body was fetched from Zoho again despite already being archived');
+});
+
+test('MAIL-23: an archive row filed under the wrong lead is not shown', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  // Exactly the damage the earlier bug did: someone else's mail, this lead's id.
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'stray-1', LeadId: ID.leadAlphaNew,
+    LeadEmail: 'someone.else@elsewhere.test', UserId: ID.repAlpha1,
+    Direction: 'out', Subject: 'Nothing to do with this company',
+    Sender: 'james@mail.hunter.io', ToAddress: 'dolapo@tjgroups.test',
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const shown = authPost(be, token, 'getStoredEmails', { leadId: ID.leadAlphaNew }).data;
+
+  assert.ok(!shown.some((m) => m.MessageId === 'stray-1'),
+    'a message with neither party matching the lead was shown on its page, ' +
+    'marked as saved in the CRM');
+
+  // The audit finds it, and the repair detaches without deleting.
+  const audit = be.call('auditEmailLogAttribution');
+  assert.equal(audit.wronglyAttributed, 1, 'the audit did not find the bad row');
+
+  be.call('repairEmailLog');
+  const row = be.rows('EmailLog').find((r) => String(r.MessageId) === 'stray-1');
+  assert.ok(row, 'the repair DELETED a real message instead of detaching it');
+  assert.equal(String(row.LeadId || ''), '', 'the row is still attached to the wrong lead');
+  assert.ok(lead, 'lead still present');
+});
+
+test('MAIL-24: HTML-escaped addresses still match their lead', () => {
+  const be = buildScenario();
+
+  // Exactly how Zoho stores them, seen in the live archive audit.
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'escaped-1', LeadId: ID.leadAlphaNew,
+    LeadEmail: 'unrelated@placeholder.test', UserId: ID.repAlpha1,
+    Direction: 'out', Subject: 'Escaped header',
+    Sender: 'dhiraj.th@tjgroups.test',
+    ToAddress: '&quot;Buyer&quot;&lt;buyer@northwind.test&gt;',
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+  assert.equal(String(lead.Email).toLowerCase(), 'buyer@northwind.test', 'fixture check');
+
+  const audit = be.call('auditEmailLogAttribution');
+  assert.equal(audit.wronglyAttributed, 0,
+    'a real message was judged unrelated because its address was HTML-escaped. ' +
+    'Running the repair would have detached genuine correspondence.');
+
+  const token = loginAs(be, ID.repAlpha1);
+  const shown = authPost(be, token, 'getStoredEmails', { leadId: ID.leadAlphaNew }).data;
+  assert.ok(shown.some((m) => m.MessageId === 'escaped-1'),
+    'the escaped-address message was hidden from its own lead');
+});
+
+test('MAIL-25: a display name with no address is never treated as one', () => {
+  const be = buildScenario();
+
+  // "Dhiraj T H" in the Sender column, with no address anywhere in it.
+  assert.equal(be.call('bareAddress', 'Dhiraj T H'), '',
+    'a bare display name was parsed as if it were an email address');
+  assert.equal(be.call('bareAddress', '&quot;Dhiraj Th&quot;&lt;d.th@tjgroups.test&gt;'),
+    'd.th@tjgroups.test');
+  assert.equal(be.call('bareAddress', 'plain@example.test'), 'plain@example.test');
+});
+
+test('MAIL-26: genuinely unrelated mail is still detected', () => {
+  const be = buildScenario();
+
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'stray-2', LeadId: ID.leadAlphaNew,
+    LeadEmail: 'someone.else@elsewhere.test', UserId: ID.repAlpha1,
+    Direction: 'out', Subject: 'Nothing to do with this company',
+    Sender: 'james@mail.hunter.test', ToAddress: 'dolapo@tjgroups.test',
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  const audit = be.call('auditEmailLogAttribution');
+  assert.equal(audit.wronglyAttributed, 1,
+    'the entity-decoding fix must not stop real mis-filing being found');
+});
+
+test('PERF-6: a sheet is located by name ONCE, then by id', () => {
+  const be = buildScenario();
+  const drive = be.env.DriveApp;
+
+  // Count folder scans — the expensive part of resolving a sheet by name.
+  let scans = 0;
+  const folder = drive.getFolderById(be.props().getProperty('DB_FOLDER_ID'));
+  const originalGetFolder = drive.getFolderById;
+  drive.getFolderById = function (id) {
+    const handle = originalGetFolder.call(drive, id);
+    const originalByName = handle.getFilesByName;
+    handle.getFilesByName = function (name) { scans++; return originalByName.call(handle, name); };
+    return handle;
+  };
+
+  const token = loginAs(be, ID.superAdmin);
+
+  // First touch of each sheet legitimately scans once to learn its file id.
+  authGet(be, token, 'getLeads', {});
+  authGet(be, token, 'getUsers', {});
+  authGet(be, token, 'getDeals', {});
+  assert.ok(scans > 0, 'the fixture never scanned the folder at all');
+
+  // Everything after that must resolve by id alone.
+  scans = 0;
+  authGet(be, token, 'getLeads', {});
+  authGet(be, token, 'getUsers', {});
+  authGet(be, token, 'getDeals', {});
+
+  drive.getFolderById = originalGetFolder;
+  assert.equal(scans, 0,
+    `the folder was scanned ${scans} more time(s). Resolving a sheet by name ` +
+    'costs three remote calls; doing it on every request is seconds of pure ' +
+    'lookup for an answer that never changes.');
+  assert.ok(folder, 'folder handle');
+});
+
+test('PERF-7: a stale cached file id heals itself', () => {
+  const be = buildScenario();
+
+  // Point the cache at a file that does not exist, as would happen if the
+  // sheet were replaced or restored from a copy.
+  be.props().setProperty('SHEETID_Leads', 'no-such-file-id');
+
+  const token = loginAs(be, ID.superAdmin);
+  const res = authGet(be, token, 'getLeads', {});
+
+  assert.equal(res.status, 'success',
+    'a stale cached id broke the CRM instead of being re-learned');
+  assert.ok(res.data.length > 0, 'no leads came back');
+
+  const relearned = be.props().getProperty('SHEETID_Leads');
+  assert.ok(relearned && relearned !== 'no-such-file-id',
+    'the bad id was not replaced, so every request pays the failure again');
+});
+
+test('MAIL-27: LeadEmail alone never vouches for an unrelated message', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  // Exactly the live shape: filed under this lead, LeadEmail set to this
+  // lead's address by the sync — but neither party is this lead. That
+  // combination IS the mis-filing bug's signature, and a fallback that
+  // trusted LeadEmail kept precisely these rows.
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'crosstalk-1', LeadId: ID.leadAlphaNew,
+    LeadEmail: String(lead.Email), UserId: ID.repAlpha1,
+    Direction: 'out', Subject: 'Re: Fwd: something else entirely',
+    Sender: 'enibe.chiagoziem@tjgroups.test',
+    ToAddress: '&quot;Ramiiz Raza&quot;&lt;ramiizraza@elsewhere.test&gt;',
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const shown = authPost(be, token, 'getStoredEmails', { leadId: ID.leadAlphaNew }).data;
+
+  assert.ok(!shown.some((m) => m.MessageId === 'crosstalk-1'),
+    'a message addressed to someone else is still shown on this lead, badged ' +
+    'as saved in the CRM');
+
+  // The audit agrees it does not belong here.
+  const audit = be.call('auditEmailLogAttribution');
+  assert.equal(audit.wronglyAttributed, 1,
+    'the audit missed a row whose only claim to this lead is its LeadEmail');
+});
+
+test('MAIL-28: a genuine message is still kept when only one side matches', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'genuine-1', LeadId: ID.leadAlphaNew,
+    LeadEmail: String(lead.Email), UserId: ID.repAlpha1,
+    Direction: 'out', Subject: 'Our proposal',
+    Sender: 'rep@tjgroups.test',
+    ToAddress: String(lead.Email),
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const shown = authPost(be, token, 'getStoredEmails', { leadId: ID.leadAlphaNew }).data;
+
+  assert.ok(shown.some((m) => m.MessageId === 'genuine-1'),
+    'the stricter rule discarded real correspondence with the lead');
+  assert.equal(be.call('auditEmailLogAttribution').wronglyAttributed, 0);
+});
+
+test('MAIL-29: a rep cannot read the body of another team\'s message', () => {
+  const be = buildScenario();
+
+  // Alpha's correspondence, archived in full.
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'private-1', LeadId: ID.leadAlphaNew,
+    UserId: ID.repAlpha1, Direction: 'in', Subject: 'Contract terms',
+    Sender: 'client@alpha.test', ToAddress: 'rep@tjgroups.test',
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+  be.call('storeMessageBody', 'private-1', 'Our budget ceiling is 40,000.');
+
+  // A rep on another team, who cannot see that lead at all.
+  const outsider = loginAs(be, ID.repBeta1);
+
+  // getStoredEmails already refuses. getEmailContent took leadId as OPTIONAL,
+  // so omitting it skipped the only check there was — and the archived-body
+  // shortcut answered before the mailbox was ever consulted.
+  const res = authPost(be, outsider, 'getEmailContent', { messageId: 'private-1' });
+
+  assert.equal(res.status, 'error',
+    'any signed-in user could read any archived message body by id alone');
+  assert.ok(!JSON.stringify(res).includes('40,000'),
+    'the body leaked in the response');
+});
+
+test('MAIL-30: unmatched mail bodies follow the unmatched-mail rule', () => {
+  const be = buildScenario();
+
+  // No LeadId: this is the mail only managers are meant to see.
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'orphan-1', LeadId: '',
+    UserId: ID.repAlpha1, Direction: 'in', Subject: 'Unfiled enquiry',
+    Sender: 'someone@nowhere.test', ToAddress: 'rep@tjgroups.test',
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+  be.call('storeMessageBody', 'orphan-1', 'Sensitive unfiled content.');
+
+  const outsider = authPost(be, loginAs(be, ID.repBeta1), 'getEmailContent',
+    { messageId: 'orphan-1' });
+  assert.equal(outsider.status, 'error',
+    'unmatched mail listed only to managers was readable by anyone');
+
+  // The people the list itself shows it to can still open it.
+  const owner = authPost(be, loginAs(be, ID.repAlpha1), 'getEmailContent',
+    { messageId: 'orphan-1' });
+  assert.equal(owner.status, 'success',
+    'the rep whose own mailbox it came from was locked out of their own mail');
+
+  const boss = authPost(be, loginAs(be, ID.superAdmin), 'getEmailContent',
+    { messageId: 'orphan-1' });
+  assert.equal(boss.status, 'success', 'a Super Admin was refused');
+});
+
+/* ------------------------------------------------------------------ *
+ * Stale follow-ups: the reason has to come from the person responsible
+ * ------------------------------------------------------------------ */
+
+/**
+ * A plain date `days` before the BACKEND's clock, which the harness freezes.
+ * Deriving these from the host clock puts every date years in the future as
+ * far as the code under test is concerned.
+ */
+function daysAgo(be, days) {
+  const now = Date.parse(be.call('nowIso'));
+  return new Date(now - days * 86400000).toISOString().slice(0, 10);
+}
+
+function withFollowUpDue(be, leadId, due) {
+  be.call('updateRecordRaw', 'Leads', leadId, {
+    NextFollowUp: due, FollowUpStatus: 'Planned',
+    FollowUpDelayReason: '', FollowUpDelayReasonAt: '', FollowUpDelayReasonBy: '',
+  });
+}
+
+test('STALE-1: a follow-up overdue by more than a day cannot be quietly moved', () => {
+  const be = buildScenario();
+  withFollowUpDue(be, ID.leadAlphaNew, daysAgo(be, 3));
+
+  const token = loginAs(be, ID.repAlpha1);
+  const res = authPost(be, token, 'updateLead', {
+    id: ID.leadAlphaNew, NextFollowUp: daysAgo(be, -2),
+  });
+
+  assert.equal(res.status, 'error');
+  assert.equal(res.code, 'FOLLOWUP_REASON_REQUIRED',
+    'pushing a stale follow-up out went through with no explanation, which is ' +
+    'exactly how a missed follow-up stops looking missed');
+
+  const after = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+  assert.equal(String(after.NextFollowUp), daysAgo(be, 3), 'the date moved anyway');
+});
+
+test('STALE-2: the reason is recorded against the person who gave it', () => {
+  const be = buildScenario();
+  withFollowUpDue(be, ID.leadAlphaNew, daysAgo(be, 3));
+
+  const token = loginAs(be, ID.repAlpha1);
+  const res = authPost(be, token, 'updateLead', {
+    id: ID.leadAlphaNew,
+    NextFollowUp: daysAgo(be, -2),
+    delayReason: 'Client asked us to hold until their board meets.',
+  });
+
+  assert.equal(res.status, 'success');
+
+  const after = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+  assert.match(String(after.FollowUpDelayReason), /board meets/);
+  assert.equal(String(after.FollowUpDelayReasonBy), ID.repAlpha1,
+    'the reason is not attributable to anyone');
+  assert.ok(Date.parse(String(after.FollowUpDelayReasonAt)),
+    'no timestamp, so nobody can tell which lapse this explained');
+
+  // Filed under its own action so a manager can list every slip.
+  const logs = authPost(be, token, 'getLogs',
+    { id: ID.leadAlphaNew, logAction: 'FOLLOWUP_DELAYED' }).data;
+  assert.equal(logs.length, 1, 'the slip is buried in a generic UPDATED row');
+  assert.match(String(logs[0].Details), /board meets/);
+});
+
+test('STALE-3: a follow-up that is merely late is not blocked', () => {
+  const be = buildScenario();
+  // Due at the end of yesterday: overdue, but by less than a day.
+  withFollowUpDue(be, ID.leadAlphaNew, daysAgo(be, 1));
+
+  const res = authPost(be, loginAs(be, ID.repAlpha1), 'updateLead', {
+    id: ID.leadAlphaNew, NextFollowUp: daysAgo(be, -2),
+  });
+
+  assert.equal(res.status, 'success',
+    'rescheduling normal day-to-day work now demands a written excuse');
+});
+
+test('STALE-4: every other edit on a stale lead is untouched', () => {
+  const be = buildScenario();
+  withFollowUpDue(be, ID.leadAlphaNew, daysAgo(be, 5));
+
+  const token = loginAs(be, ID.repAlpha1);
+  assert.equal(
+    authPost(be, token, 'updateLead', { id: ID.leadAlphaNew, Notes: 'Called, no answer.' }).status,
+    'success', 'a stale follow-up froze the rest of the lead');
+  assert.equal(
+    authPost(be, token, 'completeFollowUp', { leadId: ID.leadAlphaNew }).status,
+    'success', 'the follow-up could not even be marked done');
+});
+
+test('STALE-5: the reason cannot be forged through a normal update', () => {
+  const be = buildScenario();
+  withFollowUpDue(be, ID.leadAlphaNew, daysAgo(be, 5));
+
+  authPost(be, loginAs(be, ID.repAlpha1), 'updateLead', {
+    id: ID.leadAlphaNew,
+    Notes: 'x',
+    FollowUpDelayReason: 'Backdated excuse',
+    FollowUpDelayReasonBy: ID.superAdmin,
+    FollowUpDelayReasonAt: '2020-01-01T00:00:00.000Z',
+  });
+
+  const after = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+  assert.equal(String(after.FollowUpDelayReason || ''), '',
+    'a client wrote its own explanation, attributed to somebody else, dated ' +
+    'whenever it liked');
+});
+
+test('STALE-6: explaining a lapse on its own clears the way to reschedule', () => {
+  const be = buildScenario();
+  withFollowUpDue(be, ID.leadAlphaNew, daysAgo(be, 4));
+  const token = loginAs(be, ID.repAlpha1);
+
+  const explained = authPost(be, token, 'explainFollowUpDelay', {
+    leadId: ID.leadAlphaNew, reason: 'Waiting on legal to clear the NDA.',
+  });
+  assert.equal(explained.status, 'success');
+  assert.ok(explained.data.overdueHours >= 24);
+
+  // Having answered for this lapse, the date moves without asking again.
+  assert.equal(
+    authPost(be, token, 'updateLead', { id: ID.leadAlphaNew, NextFollowUp: daysAgo(be, -2) }).status,
+    'success', 'the rep was asked to explain the same lapse twice');
+
+  // And a lead that is not overdue has nothing to explain.
+  withFollowUpDue(be, ID.leadAlphaNew, daysAgo(be, -3));
+  assert.equal(
+    authPost(be, token, 'explainFollowUpDelay',
+      { leadId: ID.leadAlphaNew, reason: 'Pre-emptive excuse.' }).status,
+    'error', 'the field doubles as a free-text notes box on any lead');
+});
+
+test('STALE-7: a rep cannot explain away another team\'s lead', () => {
+  const be = buildScenario();
+  withFollowUpDue(be, ID.leadAlphaNew, daysAgo(be, 4));
+
+  const res = authPost(be, loginAs(be, ID.repBeta1), 'explainFollowUpDelay',
+    { leadId: ID.leadAlphaNew, reason: 'Not my lead at all.' });
+
+  assert.equal(res.status, 'error', 'an outsider wrote on a lead they cannot see');
+});
+
+/* ------------------------------------------------------------------ *
+ * A revoked Zoho connection is permanent, and must say so
+ * ------------------------------------------------------------------ */
+
+test('ZOHO-REAUTH-1: a rejected refresh token reports as needing reconnection', () => {
+  const be = buildScenario();
+
+  // A token Zoho has never heard of — exactly what a revoked or expired one
+  // looks like from here.
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: 'rep@tjgroups.test', ZohoRefreshToken: 'revoked-token-xyz',
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const res = authGet(be, token, 'getZohoEmails', { leadEmail: 'buyer@northwind.test' });
+
+  assert.equal(res.status, 'error');
+  assert.equal(res.code, 'ZOHO_REAUTH_REQUIRED',
+    'reported as a generic external error, which reads as a transient Zoho ' +
+    'blip — so the client retries it on every lead and pays a full round ' +
+    'trip each time for a call that cannot succeed');
+  assert.match(res.message, /reconnect/i,
+    'the message does not tell the user what to actually do about it');
+});
+
+test('ZOHO-REAUTH-2: a working mailbox is unaffected', () => {
+  const be = buildScenario();
+
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const res = authGet(be, token, 'getZohoEmails', { leadEmail: 'buyer@northwind.test' });
+
+  assert.notEqual(res.code, 'ZOHO_REAUTH_REQUIRED',
+    'a healthy connection was reported as needing reconnection');
+});
+
+/* ------------------------------------------------------------------ *
+ * A lead's correspondence belongs to the LEAD, not to one mailbox
+ * ------------------------------------------------------------------ */
+
+test('MAIL-31: managers see mail sent from a rep\'s own mailbox', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  // Sent by the rep, from the REP's Zoho account — the manager's mailbox has
+  // never seen this message. A live Zoho lookup only ever reads the caller's
+  // own mailbox (deliberately: nobody reads a colleague's inbox), so the
+  // archive is the only thing that can carry it across.
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'rep-sent-1', LeadId: ID.leadAlphaNew,
+    LeadEmail: String(lead.Email), UserId: ID.repAlpha1,
+    Direction: 'out', Subject: 'Our proposal',
+    Sender: 'rep@tjgroups.test', ToAddress: String(lead.Email),
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  for (const [who, id] of [['SUPER_ADMIN', ID.superAdmin], ['ADMIN', ID.adminAlpha]]) {
+    const seen = authPost(be, loginAs(be, id), 'getStoredEmails',
+      { leadId: ID.leadAlphaNew }).data;
+    assert.ok(seen.some((m) => m.MessageId === 'rep-sent-1'),
+      `${who} cannot see correspondence sent from a team member's mailbox — ` +
+      'the lead history is incomplete for exactly the people who review it');
+  }
+});
+
+test('MAIL-32: seeing team mail still requires the right to see the lead', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  be.call('appendRecordRaw', 'EmailLog', {
+    MessageId: 'rep-sent-2', LeadId: ID.leadAlphaNew,
+    LeadEmail: String(lead.Email), UserId: ID.repAlpha1,
+    Direction: 'out', Subject: 'Our proposal',
+    Sender: 'rep@tjgroups.test', ToAddress: String(lead.Email),
+    SentAt: '2026-01-05T09:00:00.000Z', SyncedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  // A rep on another team cannot see the lead, so cannot see its mail either.
+  const outsider = authPost(be, loginAs(be, ID.repBeta1), 'getStoredEmails',
+    { leadId: ID.leadAlphaNew });
+  assert.equal(outsider.status, 'error',
+    'archive visibility escaped the lead-scoping rules');
+});
+
+/* ------------------------------------------------------------------ *
+ * The scheduled sync: everyone's mailbox reaches the shared archive
+ * ------------------------------------------------------------------ */
+
+test('SYNCALL-1: the job archives mail from mailboxes other than the caller\'s', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  // A rep's own mailbox, holding a message to one of their leads. Nobody has
+  // opened this lead, so nothing has ever archived it.
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.zoho.addMessage(acct.accountId, {
+    sender: 'rep@tjgroups.test', toAddress: String(lead.Email),
+    subject: 'Sent straight from Zoho', summary: 'Not sent through the CRM.',
+    folderId: '2',   // Sent, which is where outbound mail actually lives
+  });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  assert.equal(be.rows('EmailLog').length, 0, 'sanity: archive starts empty');
+
+  const report = be.call('syncAllMailboxes', {});
+  assert.ok(report.stored > 0, 'the scheduled job archived nothing');
+
+  // And a Super Admin — whose own mailbox has never seen it — can now read it.
+  const seen = authPost(be, loginAs(be, ID.superAdmin), 'getStoredEmails',
+    { leadId: ID.leadAlphaNew }).data;
+  assert.ok(seen.some((m) => String(m.Subject).includes('straight from Zoho')),
+    'mail sent from a rep\'s own account is still invisible to a Super Admin');
+});
+
+test('SYNCALL-2: one broken mailbox does not stop the others', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  // repAlpha1's token is revoked; repAlpha2's works.
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: 'broken@tjgroups.test', ZohoRefreshToken: 'revoked-token-xyz',
+  });
+  const good = be.zoho.addAccount({ email: 'rep2@tjgroups.test' });
+  be.zoho.addMessage(good.accountId, {
+    sender: 'rep2@tjgroups.test', toAddress: String(lead.Email), subject: 'Still delivered',
+  });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha2, {
+    ZohoEmail: good.email, ZohoRefreshToken: good.refreshToken,
+  });
+
+  const report = be.call('syncAllMailboxes', {});
+
+  assert.equal(report.failed.length, 1, 'the revoked mailbox was not reported');
+  assert.ok(report.stored > 0,
+    'a single revoked token stopped the whole run — everyone else silently ' +
+    'stops being archived because one person needs to reconnect');
+});
+
+test('SYNCALL-3: a second run with no new mail does almost nothing', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.zoho.addMessage(acct.accountId, {
+    sender: 'rep@tjgroups.test', toAddress: String(lead.Email), subject: 'One',
+  });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  const first = be.call('syncAllMailboxes', {});
+  assert.ok(first.stored > 0, 'first run stored nothing');
+
+  const second = be.call('syncAllMailboxes', {});
+  assert.equal(second.stored, 0, 'the same messages were archived twice');
+  assert.ok(second.upToDate > 0,
+    'the bookmark was not used — every run would re-walk the whole page');
+
+  assert.equal(be.rows('EmailLog').length, first.stored,
+    'duplicate rows appeared in the archive');
+});
+
+test('SYNCALL-4: outbound mail is archived AND matched to its lead', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  // Inbox: something from a stranger. Sent: a reply to an actual lead.
+  be.zoho.addMessage(acct.accountId, {
+    sender: 'newsletter@somewhere.test', toAddress: 'rep@tjgroups.test',
+    subject: 'Weekly digest', folderId: '1',
+  });
+  be.zoho.addMessage(acct.accountId, {
+    sender: 'rep@tjgroups.test', toAddress: String(lead.Email),
+    subject: 'Following up on our call', folderId: '2',
+  });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  const report = be.call('syncAllMailboxes', {});
+
+  // The live symptom this covers: 50 messages archived, every one of them
+  // inbound, matchedToLead zero — because only the Inbox was ever listed.
+  assert.equal(report.matchedToLead, 1,
+    'outbound mail never reached the archive, so nothing matched a lead');
+  assert.equal(report.withoutLead, 1, 'the stranger should still be archived, unmatched');
+
+  const row = be.rows('EmailLog').find((r) => String(r.Subject).includes('Following up'));
+  assert.ok(row, 'the sent message is missing from the archive');
+  assert.equal(String(row.Direction), 'out');
+  assert.equal(String(row.LeadId), ID.leadAlphaNew);
+  assert.ok(String(row.FolderId), 'FolderId was not recorded, so the body can never be fetched');
+});
+
+test('SYNCALL-5: a token without folder access still archives, and says what is missing', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.zoho.addMessage(acct.accountId, {
+    sender: String(lead.Email), toAddress: 'rep@tjgroups.test',
+    subject: 'Client replied', folderId: '1',
+  });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+  });
+
+  // Exactly the live state: mailboxes connected before ZohoMail.folders.READ
+  // was requested can read messages but answer 401 to a folder listing.
+  be.zoho.setFault('folders', {
+    getResponseCode: () => 401,
+    getContentText: () => JSON.stringify({ status: { code: 401, description: 'Invalid OAuth Scope' } }),
+    getHeaders: () => ({}), getAllHeaders: () => ({}),
+  });
+
+  const report = be.call('syncAllMailboxes', {});
+
+  assert.equal(report.failed.length, 0,
+    'a missing folder scope failed the whole mailbox — mail that was syncing ' +
+    'a moment ago silently stopped');
+  assert.ok(report.stored > 0, 'inbound mail was not archived');
+  assert.ok(report.inboxOnly.length > 0,
+    'nothing told anyone that sent mail is still missing for this person');
+});
+
+test('ZOHO-CACHE-1: repeated operations do not mint a token each time', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.zoho.addMessage(acct.accountId, {
+    sender: String(lead.Email), toAddress: 'rep@tjgroups.test', subject: 'Hello',
+  });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+    ZohoAccountId: acct.accountId,
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const tokenCalls = () => be.zoho.state.calls.filter(
+    (c) => String(c.url).includes('/oauth/v2/token')).length;
+
+  authGet(be, token, 'getZohoEmails', { leadEmail: String(lead.Email) });
+  const afterFirst = tokenCalls();
+  assert.ok(afterFirst >= 1, 'sanity: the first call must mint a token');
+
+  // Zoho limits how often a refresh token may mint access tokens and answers
+  // "Access Denied" past that — which looks exactly like a revoked account.
+  // Browsing a few leads was enough to trip it.
+  for (let i = 0; i < 5; i++) {
+    authGet(be, token, 'getZohoEmails', { leadEmail: String(lead.Email) });
+  }
+
+  assert.equal(tokenCalls(), afterFirst,
+    `every Zoho operation minted a fresh access token (${tokenCalls()} in total) ` +
+    'instead of reusing the cached one');
+});
+
+test('ZOHO-CACHE-2: a known mailbox is not re-looked-up on every call', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+    ZohoAccountId: acct.accountId,
+  });
+
+  const token = loginAs(be, ID.repAlpha1);
+  const before = be.zoho.state.calls.filter((c) => String(c.url).endsWith('/api/accounts')).length;
+
+  authGet(be, token, 'getZohoEmails', { leadEmail: String(lead.Email) });
+
+  assert.equal(
+    be.zoho.state.calls.filter((c) => String(c.url).endsWith('/api/accounts')).length, before,
+    'the account id and address are already on the user row, yet Zoho was ' +
+    'asked for them again — a round trip that can only return the same answer');
+});
+
+test('SYNCALL-6: a client reply raises a notification and reaches the feed', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  // Inbound, from the lead. The scheduled sync archived these silently: no
+  // notification, and nothing in the global activity feed.
+  be.zoho.addMessage(acct.accountId, {
+    sender: String(lead.Email), toAddress: 'rep@tjgroups.test',
+    subject: 'Re: your proposal', folderId: '1',
+  });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+    ZohoAccountId: acct.accountId,
+  });
+
+  be.call('syncAllMailboxes', {});
+
+  const token = loginAs(be, ID.repAlpha1);
+  const received = authPost(be, token, 'getLogs',
+    { id: ID.leadAlphaNew, logAction: 'EMAIL_RECEIVED' }).data;
+
+  assert.equal(received.length, 1,
+    'no EMAIL_RECEIVED entry, so the notification bar can never tell anyone ' +
+    'a client wrote back');
+  assert.match(String(received[0].Details), /Re: your proposal/);
+});
+
+test('SYNCALL-7: outbound mail is not logged as a reply', () => {
+  const be = buildScenario();
+  const lead = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.zoho.addMessage(acct.accountId, {
+    sender: 'rep@tjgroups.test', toAddress: String(lead.Email),
+    subject: 'Our proposal', folderId: '2',
+  });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+    ZohoAccountId: acct.accountId,
+  });
+
+  be.call('syncAllMailboxes', {});
+
+  const token = loginAs(be, ID.repAlpha1);
+  const received = authPost(be, token, 'getLogs',
+    { id: ID.leadAlphaNew, logAction: 'EMAIL_RECEIVED' }).data;
+
+  assert.equal(received.length, 0,
+    'our own sent mail was announced as a client reply');
 });

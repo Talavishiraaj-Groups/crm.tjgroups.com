@@ -263,25 +263,31 @@ test('EDIT-LEGACY-2: a newly typed invalid value is still rejected', () => {
  * Lead identity is manager-only
  * ================================================================== */
 
-test('EDITPERM-1: a rep cannot change a lead\'s identity fields', () => {
+test('EDITPERM-1: a rep may correct a lead\'s identity fields', () => {
   const be = buildScenario();
   const token = loginAs(be, ID.repAlpha1);   // owns leadAlphaNew
 
+  // These were manager-only. The person who discovers a wrong address is the
+  // rep working the lead, and routing a typo fix through a manager just leaves
+  // the record wrong. Editing is recoverable and audited with before/after
+  // values; DELETION is the irreversible act and stays managers-only.
   const res = authPost(be, token, 'updateLead', {
     id: ID.leadAlphaNew,
-    Name: 'Renamed By A Rep',
-    Email: 'rep-changed@example.test',
+    Name: 'Northwind Traders Ltd',
+    Email: 'buyer.corrected@northwind.test',
     Phone: '+10000000',
-    Linkedin: 'https://linkedin.com/company/changed',
+    Linkedin: 'https://linkedin.com/company/northwind',
   });
 
-  // The identity fields are stripped, so nothing writable remains.
-  assert.equal(res.status, 'error');
-  assert.equal(res.code, 'BAD_REQUEST');
+  assert.equal(res.status, 'success', res.message);
 
-  const row = be.rows('Leads').find((l) => l.ID === ID.leadAlphaNew);
-  assert.equal(row.Name, 'Northwind Traders', 'name unchanged');
-  assert.equal(row.Email, 'buyer@northwind.test', 'email unchanged');
+  // Read back through the storage layer, not the raw sheet: a phone beginning
+  // "+" is stored with the formula-injection guard and unescaped on the way
+  // out, so the raw cell legitimately differs from the value.
+  const row = be.call('getRecordByIdRaw', 'Leads', ID.leadAlphaNew);
+  assert.equal(row.Name, 'Northwind Traders Ltd');
+  assert.equal(row.Email, 'buyer.corrected@northwind.test');
+  assert.equal(row.Phone, '+10000000');
 });
 
 test('EDITPERM-2: a rep can still do their actual job on their own lead', () => {
@@ -304,35 +310,46 @@ test('EDITPERM-2: a rep can still do their actual job on their own lead', () => 
   assert.equal(row.NextFollowUp, '2026-02-10');
 });
 
-test('EDITPERM-3: identity edits from a rep are dropped, not partially applied', () => {
+test('EDITPERM-3: a mixed edit applies in full, and is audited', () => {
   const be = buildScenario();
   const token = loginAs(be, ID.repAlpha1);
 
-  // A mixed payload must not sneak an identity change through alongside a
-  // legitimate one.
   const res = authPost(be, token, 'updateLead', {
     id: ID.leadAlphaNew,
     Notes: 'legitimate note',
-    Name: 'Sneaky Rename',
+    Name: 'Renamed By The Owner',
   });
   assert.equal(res.status, 'success');
 
   const row = be.rows('Leads').find((l) => l.ID === ID.leadAlphaNew);
-  assert.equal(row.Notes, 'legitimate note', 'the allowed field saved');
-  assert.equal(row.Name, 'Northwind Traders', 'the restricted field did not');
+  assert.equal(row.Notes, 'legitimate note');
+  assert.equal(row.Name, 'Renamed By The Owner');
+
+  // An open edit permission is only safe because every change is recoverable
+  // from the audit trail.
+  const logs = be.rows('Logs').filter(
+    (l) => String(l.EntityId) === ID.leadAlphaNew && String(l.Action) === 'UPDATED');
+  assert.ok(logs.length > 0, 'the edit was not audited');
+  assert.match(String(logs[logs.length - 1].Metadata), /Northwind Traders/,
+    'the previous value was not recorded, so the change cannot be undone');
 });
 
-test('EDITPERM-4: a SETTER is equally restricted', () => {
+test('EDITPERM-4: a SETTER may edit too, but still cannot delete', () => {
   const be = buildScenario();
   const token = loginAs(be, ID.setterAlpha);   // setter on leadAlphaNew
 
   const res = authPost(be, token, 'updateLead', {
-    id: ID.leadAlphaNew, Name: 'Setter Rename',
+    id: ID.leadAlphaNew, Name: 'Setter Correction',
   });
-  assert.equal(res.status, 'error');
+  assert.equal(res.status, 'success', res.message);
+  assert.equal(
+    be.rows('Leads').find((l) => l.ID === ID.leadAlphaNew).Name, 'Setter Correction');
 
-  const row = be.rows('Leads').find((l) => l.ID === ID.leadAlphaNew);
-  assert.equal(row.Name, 'Northwind Traders');
+  const del = authPost(be, token, 'deleteLead', {
+    leadId: ID.leadAlphaNew, reason: 'should not be permitted',
+  });
+  assert.equal(del.status, 'error', 'a setter was able to delete a lead');
+  assert.equal(del.code, 'FORBIDDEN');
 });
 
 test('EDITPERM-5: managers can edit identity fields', () => {
@@ -388,15 +405,22 @@ test('EDITPERM-7: a rep can still CREATE a lead with its contact details', () =>
   assert.equal(row.Email, 'hello@newprospect.test', 'and the contact details');
   assert.equal(row.OwnerRepId, ID.repAlpha1, 'and it belongs to them');
 
-  // But they still cannot rename it afterwards.
+  // And they can correct it afterwards — the same person, the same lead.
   const rename = authPost(be, token, 'updateLead', {
-    id: res.data.ID, Name: 'Renamed After The Fact',
+    id: res.data.ID, Name: 'Brand New Prospect Limited',
   });
-  assert.equal(rename.status, 'error');
+  assert.equal(rename.status, 'success', rename.message);
   assert.equal(
     be.rows('Leads').find((l) => l.ID === res.data.ID).Name,
-    'Brand New Prospect Ltd'
+    'Brand New Prospect Limited'
   );
+
+  // But not remove it. Creating and correcting are theirs; deleting is not.
+  const del = authPost(be, token, 'deleteLead', {
+    leadId: res.data.ID, reason: 'should not be permitted',
+  });
+  assert.equal(del.status, 'error', 'a rep deleted a lead they created');
+  assert.equal(del.code, 'FORBIDDEN');
 });
 
 /* ================================================================== *

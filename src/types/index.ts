@@ -62,6 +62,10 @@ export interface Lead {
   /** 'Planned' | 'Completed' — blank on rows written before this existed. */
   followUpStatus?: string;
   followUpCompletedAt?: string;
+  /** Why a follow-up was left outstanding. Server-written; never editable. */
+  followUpDelayReason?: string;
+  followUpDelayReasonAt?: string;
+  followUpDelayReasonBy?: string;
   /** What was found out about this company. */
   researchFindings?: string;
   /** Why it was judged worth approaching. */
