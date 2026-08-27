@@ -431,6 +431,24 @@ function messageInvolves(msg, address) {
   return false;
 }
 
+function extractAllAddresses(msg) {
+  if (!msg) return [];
+  var fields = [msg.sender, msg.fromAddress, msg.toAddress, msg.ccAddress, msg.bccAddress];
+  var addrs = [];
+  for (var f = 0; f < fields.length; f++) {
+    var raw = decodeEntities(fields[f] || '');
+    if (!raw) continue;
+    var parts = raw.split(/[,;]/);
+    for (var p = 0; p < parts.length; p++) {
+      var addr = bareAddress(parts[p]);
+      if (addr && addrs.indexOf(addr) === -1) {
+        addrs.push(addr);
+      }
+    }
+  }
+  return addrs;
+}
+
 function isInboundFrom(msg, leadEmail) {
   var needle = String(leadEmail || '').trim().toLowerCase();
   if (!needle) return false;
@@ -695,30 +713,24 @@ function getStoredEmails(actor, params) {
 
     var filedHere = (leadId && String(r.LeadId) === leadId) ||
                     (leadEmail && String(r.LeadEmail).toLowerCase() === leadEmail);
-    if (!filedHere) continue;
 
-    // Being filed under this lead is NOT enough.
-    //
-    // An earlier bug wrote unrelated mail into the archive against the wrong
-    // lead, and because this only matched on LeadId those rows kept appearing
-    // — one company's page showing another's correspondence, marked "SAVED IN
-    // CRM" as though it were verified. Stored data deserves the same check as
-    // a live search result: prove the lead's own address is actually on the
-    // message.
-    // The message must actually involve this lead. Nothing else counts.
-    //
-    // There used to be a fallback here that kept a row when its LeadEmail
-    // matched, meaning to rescue mail synced before a lead's address was
-    // corrected. But LeadEmail records WHICH LEAD WAS OPEN when the row was
-    // written — not who was on the message. That is precisely the signature
-    // of the mis-filing bug, so the fallback rescued exactly the rows it
-    // should have rejected: a lead's page kept showing correspondence with
-    // completely different people, badged "SAVED IN CRM".
-    if (authoritative && !messageInvolves({
+    var involves = authoritative && messageInvolves({
       sender: r.Sender, fromAddress: r.Sender,
       toAddress: r.ToAddress, ccAddress: r.CcAddress
-    }, authoritative)) {
-      continue;
+    }, authoritative);
+
+    if (!filedHere && !involves) continue;
+
+    // If filed under this lead but doesn't actually involve this lead, reject
+    if (filedHere && authoritative && !involves) continue;
+
+    // Backfill LeadId if message was recorded earlier with blank/unmatched LeadId
+    if (leadId && String(r.LeadId) !== leadId && involves) {
+      try {
+        updateRecordRaw('EmailLog', r.ID, { LeadId: leadId, LeadEmail: authoritative });
+        r.LeadId = leadId;
+        r.LeadEmail = authoritative;
+      } catch (e) {}
     }
 
     out.push(r);
@@ -922,10 +934,29 @@ function getEmailContent(actor, params) {
   var folderId = String(params.folderId || '');
   if (!folderId && logRow) folderId = String(logRow.FolderId || '');
 
-  var box = openMailbox(actor.ID);
   var cfg = getZohoConfig();
+  var content = '';
 
-  var content = fetchZohoMessageContent(box, cfg, folderId, messageId);
+  // Determine mailboxes to query:
+  // 1. If message was logged under a specific user's mailbox (logRow.UserId), query that mailbox first.
+  // 2. Query the actor's own mailbox.
+  var targetUserIds = [];
+  if (logRow && logRow.UserId) {
+    targetUserIds.push(String(logRow.UserId));
+  }
+  if (actor && targetUserIds.indexOf(String(actor.ID)) === -1) {
+    targetUserIds.push(String(actor.ID));
+  }
+
+  for (var u = 0; u < targetUserIds.length; u++) {
+    try {
+      var box = openMailbox(targetUserIds[u]);
+      content = fetchZohoMessageContent(box, cfg, folderId, messageId);
+      if (content) break;
+    } catch (e) {
+      // mailbox not connected or token expired; try next target
+    }
+  }
   if (!content) {
     // The message may have left the mailbox. Fall back to what was archived,
     // and say so, rather than showing an empty panel.
@@ -1177,24 +1208,37 @@ function syncMailboxForUser(userId, ctx, limit) {
       // it is older and already held too.
       if (ctx.seen[id]) break;
 
+      var allAddrs = extractAllAddresses(msg);
       var sender = bareAddress(msg.sender || msg.fromAddress);
       var recipient = bareAddress(msg.toAddress);
       var inbound = sender !== '' && sender !== mine;
-      // The counterparty is whoever is not us.
-      var other = inbound ? sender : recipient;
 
-      var lead = other ? ctx.leadIndex[other] : null;
+      // Find any matching lead from all parties involved in this message
+      var lead = null;
+      var matchedAddr = '';
+      for (var a = 0; a < allAddrs.length; a++) {
+        var addr = allAddrs[a];
+        if (addr !== mine && ctx.leadIndex[addr]) {
+          lead = ctx.leadIndex[addr];
+          matchedAddr = addr;
+          break;
+        }
+      }
+
+      // The counterparty is whoever is not us.
+      var other = matchedAddr || (inbound ? sender : recipient) || (allAddrs.length ? allAddrs[0] : '');
 
       appendRecordRaw('EmailLog', {
         MessageId: id,
         LeadId: lead ? String(lead.ID) : '',
-        LeadEmail: other,
+        LeadEmail: lead ? bareAddress(lead.Email) : other,
         UserId: userId,
         Direction: inbound ? 'in' : 'out',
         Subject: String(msg.subject || '(No Subject)').slice(0, 500),
         Summary: String(msg.summary || '').slice(0, 2000),
         Sender: String(msg.sender || msg.fromAddress || ''),
         ToAddress: String(msg.toAddress || ''),
+        CcAddress: String(msg.ccAddress || ''),
         SentAt: toIsoTimestamp(msg.receivedTime, ctx.now),
         SyncedAt: ctx.now,
         // Zoho addresses a body as folder + message, so without this the full
@@ -1403,10 +1447,30 @@ function getUnmatchedEmails(actor, params) {
   if (isNaN(limit) || limit < 1 || limit > 500) limit = 200;
 
   var rows = getRecordsRaw('EmailLog');
+  var leadIndex = leadIndexByEmail();
   var out = [];
+
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
     if (String(r.LeadId || '')) continue;
+
+    // Check if this message actually matches a lead now (e.g. imported after mailbox sync)
+    var leadEmail = bareAddress(r.LeadEmail);
+    var sender = bareAddress(r.Sender);
+    var to = bareAddress(r.ToAddress);
+    var matchedLead = (leadEmail && leadIndex[leadEmail]) ||
+                      (sender && leadIndex[sender]) ||
+                      (to && leadIndex[to]);
+    if (matchedLead) {
+      try {
+        updateRecordRaw('EmailLog', r.ID, {
+          LeadId: String(matchedLead.ID),
+          LeadEmail: bareAddress(matchedLead.Email)
+        });
+      } catch (e) {}
+      continue;
+    }
+
     if (allowed !== null && allowed.indexOf(String(r.UserId)) === -1) continue;
     out.push(r);
   }

@@ -468,6 +468,17 @@ function createEntity(sheetName, payload, actor, validator, prepare) {
   if (!check.ok) throw new ApiError('VALIDATION_FAILED', check.errors[0].message, check.errors);
 
   var created = withLock(function () {
+    if (sheetName === 'Leads') {
+      var existingLeads = getRecordsRaw('Leads');
+      var cleanEmail = bareAddress(clean.Email);
+      for (var i = 0; i < existingLeads.length; i++) {
+        if (isDeletedRow(existingLeads[i])) continue;
+        var exEmail = bareAddress(existingLeads[i].Email);
+        if (cleanEmail && exEmail && cleanEmail === exEmail) {
+          throw new ApiError('DUPLICATE', 'A lead with email ' + clean.Email + ' already exists.');
+        }
+      }
+    }
     return appendRecordRaw(sheetName, clean);
   }, 'create' + sheetName);
 

@@ -50,7 +50,7 @@ export const LeadsPage: React.FC = () => {
   // Column map: lead field -> which column header
   const LEAD_FIELDS = [
     { key: 'name',  label: 'Name *', required: true },
-    { key: 'email', label: 'Email *', required: true },
+    { key: 'email', label: 'Email', required: false },
     { key: 'phone', label: 'Phone', required: false },
     { key: 'linkedin', label: 'LinkedIn URL', required: false },
     { key: 'notes',    label: 'Notes', required: false },
@@ -248,35 +248,81 @@ export const LeadsPage: React.FC = () => {
     if (file) parseFile(file);
   };
 
+  const isPlaceholder = (val?: string) => {
+    if (!val) return true;
+    const s = String(val).trim().toLowerCase();
+    return s === '' || s === 'n/a' || s === 'na' || s === 'none' || s === 'null' ||
+           s === 'nil' || s === '-' || s === '--' || s === 'n.a.' || s === 'no email' || s === 'unknown';
+  };
+
   const handleImport = async () => {
     if (!user) return;
     const errs: string[] = [];
     setImporting(true);
     setImportProgress(0);
     setImportErrors([]);
+
+    const existingEmails = new Set(
+      leads.map(l => (l.email || '').trim().toLowerCase()).filter(Boolean)
+    );
+    const seenImportEmails = new Set<string>();
+
     for (let i = 0; i < importRows.length; i++) {
       const row = importRows[i];
-      const name  = String(row[colMap.name]  || '').trim();
-      const email = String(row[colMap.email] || '').trim();
-      if (!name || !email) {
-        errs.push(`Row ${i + 1}: Missing required Name or Email — skipped.`);
+      const name = String(row[colMap.name] || '').trim();
+      if (!name) {
+        errs.push(`Row ${i + 1}: Missing required Name — skipped.`);
         setImportProgress(Math.round(((i + 1) / importRows.length) * 100));
         continue;
       }
+
+      let email = String((colMap.email ? row[colMap.email] : '') || '').trim();
+      if (isPlaceholder(email)) email = '';
+
+      let phone = String((colMap.phone ? row[colMap.phone] : '') || '').trim();
+      if (isPlaceholder(phone)) phone = '';
+
+      let linkedin = String((colMap.linkedin ? row[colMap.linkedin] : '') || '').trim();
+      if (isPlaceholder(linkedin)) {
+        linkedin = '';
+      } else if (linkedin && !/^https?:\/\//i.test(linkedin)) {
+        linkedin = 'https://' + linkedin.replace(/^www\./i, 'www.');
+      }
+
+      const notes = String((colMap.notes ? row[colMap.notes] : '') || '').trim();
+
+      // Check for duplicate email within existing leads or within this import batch
+      if (email) {
+        const lowerEmail = email.toLowerCase();
+        if (existingEmails.has(lowerEmail)) {
+          errs.push(`Row ${i + 1} (${name}): Lead with email "${email}" already exists in CRM.`);
+          setImportProgress(Math.round(((i + 1) / importRows.length) * 100));
+          continue;
+        }
+        if (seenImportEmails.has(lowerEmail)) {
+          errs.push(`Row ${i + 1} (${name}): Duplicate email "${email}" in import file.`);
+          setImportProgress(Math.round(((i + 1) / importRows.length) * 100));
+          continue;
+        }
+        seenImportEmails.add(lowerEmail);
+      }
+
       try {
         await api.leads.create({
           name,
           email,
-          phone:    String(row[colMap.phone]    || '').trim(),
-          linkedin: String(row[colMap.linkedin] || '').trim(),
-          notes:    String(row[colMap.notes]    || '').trim(),
+          phone,
+          linkedin,
+          notes,
           status: 'New',
           ownerRepId: user.id,
           setterId:   user.id,
           closerId:   '',
         });
-      } catch {
-        errs.push(`Row ${i + 1} (${name}): Failed to create.`);
+        if (email) existingEmails.add(email.toLowerCase());
+      } catch (err: any) {
+        const msg = err?.message || 'Failed to create.';
+        errs.push(`Row ${i + 1} (${name}): ${msg}`);
       }
       setImportProgress(Math.round(((i + 1) / importRows.length) * 100));
     }
@@ -726,7 +772,7 @@ export const LeadsPage: React.FC = () => {
                   </div>
 
                   {/* Column Mapping */}
-                  <div className="bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] p-5">
+                  <div className="bg-[#F9F9F9] border border-[#DFDFDF] rounded-[8px] p-5 shrink-0">
                     <p className="text-[9px] font-black text-[#161616]/30 uppercase tracking-widest mb-4">Map Your Columns → CRM Fields</p>
                     <div className="grid grid-cols-2 gap-3">
                       {LEAD_FIELDS.map(({ key, label }) => (
@@ -748,11 +794,11 @@ export const LeadsPage: React.FC = () => {
                   </div>
 
                   {/* Preview table */}
-                  <div className="border border-[#DFDFDF] rounded-[8px] overflow-hidden flex flex-col max-h-[220px]">
+                  <div className="border border-[#DFDFDF] rounded-[8px] overflow-hidden flex flex-col shrink-0">
                     <div className="px-4 py-2.5 bg-[#F9F9F9] border-b border-[#DFDFDF] shrink-0">
                       <p className="text-[9px] font-black text-[#161616]/30 uppercase tracking-widest">Preview — first 5 rows</p>
                     </div>
-                    <div className="overflow-auto flex-1">
+                    <div className="overflow-x-auto max-h-[220px] overflow-y-auto">
                       <table className="w-full text-[11px] border-collapse">
                         <thead>
                           <tr className="border-b border-[#DFDFDF] sticky top-0 bg-[#F9F9F9]">
@@ -824,7 +870,7 @@ export const LeadsPage: React.FC = () => {
             {importRows.length > 0 && !importDone && (
               <div className="flex justify-between items-center px-7 py-4 border-t border-[#DFDFDF] bg-[#F9F9F9] shrink-0">
                 <p className="text-[10px] text-[#161616]/40 font-medium">
-                  {importRows.length} rows · Name &amp; Email are required
+                  {importRows.length} rows · Name is required (Email &amp; other fields optional)
                 </p>
                 <div className="flex gap-3">
                   <button
@@ -835,7 +881,7 @@ export const LeadsPage: React.FC = () => {
                   </button>
                   <button
                     onClick={handleImport}
-                    disabled={importing || !colMap.name || !colMap.email}
+                    disabled={importing || !colMap.name}
                     className="flex items-center gap-2 bg-[#161616] text-white px-6 py-2.5 rounded-[6px] text-[11px] font-black uppercase tracking-[0.15em] hover:opacity-90 disabled:opacity-30 transition-all shadow-lg"
                   >
                     <Upload className="w-3.5 h-3.5" />

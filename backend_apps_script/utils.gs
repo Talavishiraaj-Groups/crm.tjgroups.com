@@ -612,6 +612,13 @@ function isFiniteNumber(v) {
   return !isNaN(n) && isFinite(n);
 }
 
+function isPlaceholderValue(str) {
+  if (str === undefined || str === null) return true;
+  var s = String(str).trim().toLowerCase();
+  return s === '' || s === 'n/a' || s === 'na' || s === 'none' || s === 'null' ||
+         s === 'nil' || s === '-' || s === '--' || s === 'n.a.' || s === 'no email' || s === 'unknown';
+}
+
 function validateLead(payload, opts) {
   opts = opts || {};
   var r = ValidationResult();
@@ -621,14 +628,33 @@ function validateLead(payload, opts) {
     if (isBlank(payload.Name)) addError(r, 'Name', 'Lead name is required.');
     else if (String(payload.Name).length > MAX_NAME) addError(r, 'Name', 'Lead name is too long.');
   }
-  if (payload.Email !== undefined && !isBlank(payload.Email) && !isEmail(payload.Email)) {
-    addError(r, 'Email', 'Email address is not valid.');
+  if (payload.Email !== undefined) {
+    if (isPlaceholderValue(payload.Email)) {
+      payload.Email = '';
+    } else if (!isEmail(payload.Email)) {
+      addError(r, 'Email', 'Email address is not valid.');
+    }
   }
-  if (payload.Phone !== undefined && String(payload.Phone).length > 40) {
-    addError(r, 'Phone', 'Phone number is too long.');
+  if (payload.Phone !== undefined) {
+    if (isPlaceholderValue(payload.Phone)) {
+      payload.Phone = '';
+    } else if (String(payload.Phone).length > 40) {
+      addError(r, 'Phone', 'Phone number is too long.');
+    }
   }
-  if (payload.Linkedin !== undefined && !isBlank(payload.Linkedin) && !isHttpUrl(payload.Linkedin)) {
-    addError(r, 'Linkedin', 'LinkedIn must be an http(s) URL.');
+  if (payload.Linkedin !== undefined) {
+    if (isPlaceholderValue(payload.Linkedin)) {
+      payload.Linkedin = '';
+    } else {
+      var li = String(payload.Linkedin).trim();
+      if (!/^https?:\/\//i.test(li)) {
+        li = 'https://' + li;
+        payload.Linkedin = li;
+      }
+      if (!isHttpUrl(payload.Linkedin)) {
+        addError(r, 'Linkedin', 'LinkedIn must be an http(s) URL.');
+      }
+    }
   }
   if (payload.Status !== undefined && !isBlank(payload.Status) &&
       LEAD_STATUSES.indexOf(String(payload.Status)) === -1) {
