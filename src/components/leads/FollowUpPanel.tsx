@@ -34,12 +34,14 @@ export const FollowUpPanel: React.FC<Props> = ({ lead, onDone, maxDate }) => {
   const [today] = useState(() => new Date().toISOString().split('T')[0]);
 
   const due = (lead.nextFollowUp ?? '').split('T')[0];
-  const state = !due ? 'UNSET' : due < today ? 'OVERDUE' : due === today ? 'DUE TODAY' : 'SCHEDULED';
+  const isCompleted = lead.followUpStatus === 'Completed';
+  const state = isCompleted && !due ? 'COMPLETED' : !due ? 'UNSET' : due < today ? 'OVERDUE' : due === today ? 'DUE TODAY' : 'SCHEDULED';
 
   const badgeClass = {
     OVERDUE: 'bg-red-100 text-red-700 border-red-200',
     'DUE TODAY': 'bg-amber-100 text-amber-700 border-amber-200',
     SCHEDULED: 'bg-green-100 text-green-700 border-green-200',
+    COMPLETED: 'bg-blue-100 text-blue-700 border-blue-200',
     UNSET: 'bg-gray-100 text-gray-500 border-gray-200',
   }[state];
 

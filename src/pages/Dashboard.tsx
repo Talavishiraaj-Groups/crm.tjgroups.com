@@ -115,8 +115,13 @@ export const Dashboard: React.FC = () => {
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
 
   const todayStr = new Date().toISOString().split('T')[0];
-  const overdueFollowUps = myLeads.filter(l => l.nextFollowUp && l.nextFollowUp < todayStr);
-  const todayFollowUps = myLeads.filter(l => l.nextFollowUp && l.nextFollowUp === todayStr);
+  const isFollowUpActive = (l: Lead) => {
+    if (!l.nextFollowUp || l.followUpStatus === 'Completed') return false;
+    if (l.status === 'Closed' || l.status === 'Converted') return false;
+    return true;
+  };
+  const overdueFollowUps = myLeads.filter(l => isFollowUpActive(l) && l.nextFollowUp.split('T')[0] < todayStr);
+  const todayFollowUps = myLeads.filter(l => isFollowUpActive(l) && l.nextFollowUp.split('T')[0] === todayStr);
 
   const kpis = [
     { label: 'Active Leads', value: myLeads.length, sub: 'Total assigned', path: '/leads', icon: Users },
@@ -214,7 +219,8 @@ export const Dashboard: React.FC = () => {
                 </div>
               ) : (
                 [...overdueFollowUps, ...todayFollowUps].map(lead => {
-                  const isOverdue = lead.nextFollowUp && lead.nextFollowUp < todayStr;
+                  const due = lead.nextFollowUp ? lead.nextFollowUp.split('T')[0] : '';
+                  const isOverdue = due && due < todayStr;
                   return (
                     <div 
                       key={lead.id} 
@@ -228,7 +234,7 @@ export const Dashboard: React.FC = () => {
                           <div className="flex items-center gap-2">
                             <h4 className="text-sm font-bold text-[#161616]">{lead.name}</h4>
                             <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider ${isOverdue ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'}`}>
-                              {isOverdue ? `OVERDUE (${lead.nextFollowUp})` : 'DUE TODAY'}
+                              {isOverdue ? `OVERDUE (${due})` : 'DUE TODAY'}
                             </span>
                           </div>
                           <p className="text-[11px] text-[#161616]/50 font-medium mt-0.5">{lead.email} · {lead.phone}</p>

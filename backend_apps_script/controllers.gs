@@ -1211,8 +1211,14 @@ function completeFollowUp(actor, payload) {
 
     var current = String(lead.FollowUpStatus || '') || 'Planned';
 
+    var next = String(payload.nextFollowUp || '').trim();
+
     // Idempotent replay: already completed and no new follow-up scheduled.
-    if (current === 'Completed') {
+    if (current === 'Completed' && !next) {
+      // Ensure NextFollowUp is cleared even if legacy row retained a stale date
+      if (lead.NextFollowUp) {
+        updateRecordRaw('Leads', leadId, { NextFollowUp: '' });
+      }
       return {
         lead: stripInternal(lead),
         idempotent: true,
@@ -1221,7 +1227,7 @@ function completeFollowUp(actor, payload) {
     }
 
     var verdict = canTransitionFollowUp(current, 'Completed');
-    if (!verdict.allowed) throw new ApiError('ILLEGAL_TRANSITION', verdict.reason);
+    if (!verdict.allowed && current !== 'Completed') throw new ApiError('ILLEGAL_TRANSITION', verdict.reason);
 
     var now = new Date().toISOString();
     var patch = {
@@ -1230,19 +1236,15 @@ function completeFollowUp(actor, payload) {
       FollowUpCompletedBy: actor ? actor.ID : 'SYSTEM'
     };
 
-    // Scheduling the next one is part of the same transaction when supplied.
-    if (payload.nextFollowUp !== undefined) {
-      var next = String(payload.nextFollowUp || '');
-      if (next) {
-        if (isNaN(Date.parse(next))) {
-          throw new ApiError('VALIDATION_FAILED', 'nextFollowUp is not a valid date.');
-        }
-        patch.NextFollowUp = next;
-        patch.FollowUpStatus = 'Planned';   // a fresh follow-up is now pending
-        patch.FollowUpCompletedAt = now;    // but this one did complete
-      } else {
-        patch.NextFollowUp = '';
+    // If nextFollowUp date is supplied, schedule the next planned follow-up
+    if (next) {
+      if (isNaN(Date.parse(next))) {
+        throw new ApiError('VALIDATION_FAILED', 'nextFollowUp is not a valid date.');
       }
+      patch.NextFollowUp = next;
+      patch.FollowUpStatus = 'Planned';
+    } else {
+      patch.NextFollowUp = '';
     }
 
     var updated = updateRecordRaw('Leads', leadId, patch);

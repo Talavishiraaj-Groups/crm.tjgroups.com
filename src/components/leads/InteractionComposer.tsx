@@ -66,7 +66,7 @@ export const InteractionComposer: React.FC<Props> = ({ lead, maxDate, onDone }) 
         await api.leads.completeFollowUp(lead.id, {
           contactMode: mode,
           outcome: note.trim(),
-          nextFollowUp: nextDate.trim() || undefined,
+          nextFollowUp: nextDate.trim() || '',
         });
       } else {
         await api.logs.create({

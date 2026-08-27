@@ -169,12 +169,14 @@ export const LeadsPage: React.FC = () => {
       let matchFollowUp = true;
       if (followUpFilter !== 'all') {
         const todayStr = new Date().toISOString().split('T')[0];
+        const followUpDate = l.nextFollowUp ? l.nextFollowUp.split('T')[0] : '';
+        const isCompleted = l.followUpStatus === 'Completed';
+
         if (followUpFilter === 'unset') {
-          matchFollowUp = !l.nextFollowUp;
-        } else if (!l.nextFollowUp) {
+          matchFollowUp = !followUpDate || isCompleted;
+        } else if (!followUpDate || isCompleted) {
           matchFollowUp = false;
         } else {
-          const followUpDate = l.nextFollowUp;
           if (followUpFilter === 'today') {
             matchFollowUp = followUpDate === todayStr;
           } else if (followUpFilter === 'upcoming') {
