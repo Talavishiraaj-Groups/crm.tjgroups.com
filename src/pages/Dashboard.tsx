@@ -115,13 +115,17 @@ export const Dashboard: React.FC = () => {
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
 
   const todayStr = new Date().toISOString().split('T')[0];
-  const isFollowUpActive = (l: Lead) => {
+  const isFollowUpActive = (l: Lead): l is Lead & { nextFollowUp: string } => {
     if (!l.nextFollowUp || l.followUpStatus === 'Completed') return false;
     if (l.status === 'Closed' || l.status === 'Converted') return false;
     return true;
   };
-  const overdueFollowUps = myLeads.filter(l => isFollowUpActive(l) && l.nextFollowUp.split('T')[0] < todayStr);
-  const todayFollowUps = myLeads.filter(l => isFollowUpActive(l) && l.nextFollowUp.split('T')[0] === todayStr);
+  const overdueFollowUps = myLeads.filter((l): l is Lead & { nextFollowUp: string } => 
+    isFollowUpActive(l) && l.nextFollowUp.split('T')[0] < todayStr
+  );
+  const todayFollowUps = myLeads.filter((l): l is Lead & { nextFollowUp: string } => 
+    isFollowUpActive(l) && l.nextFollowUp.split('T')[0] === todayStr
+  );
 
   const kpis = [
     { label: 'Active Leads', value: myLeads.length, sub: 'Total assigned', path: '/leads', icon: Users },
