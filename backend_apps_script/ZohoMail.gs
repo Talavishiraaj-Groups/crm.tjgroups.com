@@ -1843,28 +1843,13 @@ var SIGNATURE_OBSERVATION_ADAPTERS = {
   'static': function (content) { return content; },
 
   /**
-   * Remote stylesheet, resolving the sender's name through `content:` on a
-   * pseudo-element.
+   * Remote stylesheet via @import — DEPRECATED.
    *
-   * This is the only mechanism that matches the requirement as stated:
-   * server-resolved TEXT at render time, with no image, pixel, SVG, web font,
-   * wrapped link, script, iframe or AMP part.
-   *
-   * WHETHER ANY CLIENT FETCHES IT IS UNMEASURED. Gmail and Outlook are
-   * documented not to honour `@import` in message HTML; Apple Mail is WebKit
-   * and might. Enabling this adapter is how that gets measured with real mail.
-   *
-   * Two properties make it safe to try:
-   *   - the static signature is ALSO present, so a client that strips the
-   *     stylesheet still shows a correct, complete sign-off;
-   *   - HTML only. A plaintext message is left alone rather than being
-   *     converted, because converting every message to HTML is a change this
-   *     codebase deliberately reversed once already.
+   * Zoho's outbound filter strips or hangs on @import url(...), making this
+   * mechanism non-functional. Kept for reference; do not enable in production.
    */
   'css-import': function (content, ctx) {
     if (!ctx || !ctx.token) return content;
-    // A <style> block only exists in HTML. Refusing here rather than
-    // upgrading the message is what keeps plaintext plaintext.
     if (detectMailFormat(content) !== 'html') return content;
 
     var href = observationBaseUrl() +
@@ -1873,6 +1858,51 @@ var SIGNATURE_OBSERVATION_ADAPTERS = {
     return content.replace(
       '<!--TJG_SIG_OBSERVE-->',
       '<style>@import url("' + href + '");</style>'
+    );
+  },
+
+  /**
+   * Remote @font-face WOFF2 — experimental observation adapter.
+   *
+   * Inserts a @font-face declaration pointing to the observation font
+   * endpoint. The normal static signature text is preserved inside a
+   * <span class="tjg-observed-signature"> that references the remote font
+   * family with a safe local fallback.
+   *
+   * Properties:
+   *   - the static signature text is ALWAYS present and readable, even if
+   *     the remote font never loads;
+   *   - HTML only — plaintext messages are left alone;
+   *   - NO @import, NO images, NO tracking pixels, NO JavaScript;
+   *   - a client that strips the <style> block still shows a correct,
+   *     complete sign-off.
+   *
+   * WHETHER ANY CLIENT FETCHES THE FONT IS BEING MEASURED. This adapter
+   * exists to test that on real production mail.
+   */
+  'font-face': function (content, ctx) {
+    if (!ctx || !ctx.token) return content;
+    if (detectMailFormat(content) !== 'html') return content;
+
+    var fontUrl = observationBaseUrl() +
+                  '/api/email-observation/font/' + encodeURIComponent(ctx.token) + '.woff2';
+
+    var styleBlock =
+      '<style type="text/css">' +
+      '@font-face{' +
+        'font-family:"TJGDynamicSig";' +
+        'src:url("' + fontUrl + '") format("woff2");' +
+        'font-weight:normal;' +
+        'font-style:normal;' +
+      '}' +
+      '.tjg-observed-signature{' +
+        'font-family:"TJGDynamicSig",Arial,Helvetica,sans-serif;' +
+      '}' +
+      '</style>';
+
+    return content.replace(
+      '<!--TJG_SIG_OBSERVE-->',
+      styleBlock
     );
   }
 };
@@ -2003,12 +2033,16 @@ function verifyObservationToken(token) {
  */
 function createObservation(actor, leadId, toAddress) {
   var now = new Date().toISOString();
+  var id = Utilities.getUuid();
+  var token = mintObservationToken(id);
+
   var row = appendRecordRaw('EmailObservation', {
+    ID: id,
     EmailLogId: '',
     MessageId: '',
     LeadId: String(leadId || ''),
     UserId: actor ? actor.ID : '',
-    Token: '',
+    Token: token,
     State: OBSERVATION_STATES.SENT,
     FirstObservedAt: '',
     LastObservedAt: '',
@@ -2019,9 +2053,7 @@ function createObservation(actor, leadId, toAddress) {
     UpdatedAt: now
   });
 
-  var token = mintObservationToken(String(row.ID));
-  updateRecordRaw('EmailObservation', row.ID, { Token: token });
-  return { id: String(row.ID), token: token };
+  return { id: id, token: token };
 }
 
 /**
@@ -2302,15 +2334,23 @@ function assembleSignature(actor, content, ctx) {
   var isHtml = detectMailFormat(body) === 'html';
   var block;
 
+  // Whether the signature text should be wrapped in the observation class.
+  // Only true when an observation token is present — normal sends get the
+  // exact original HTML with no extra markup.
+  var _wrapObserved = !!(ctx && ctx.token);
+
   if (override) {
     if (isHtml) {
       // Escaped, then newlines restored as <br>. The sender is typing text,
       // not authoring markup, and letting arbitrary HTML through the composer
       // would make the signature a script-injection surface.
+      var overrideHtml = escapeHtml(override).replace(/\r?\n/g, '<br>');
       block = '<div style="margin-top:16px">' +
               '<!--TJG_SIG_OBSERVE-->' +
               '<p style="margin:0">' +
-              escapeHtml(override).replace(/\r?\n/g, '<br>') +
+              (_wrapObserved ? '<span class="tjg-observed-signature">' : '') +
+              overrideHtml +
+              (_wrapObserved ? '</span>' : '') +
               '</p></div>';
     } else {
       block = '\n\n' + override;
@@ -2330,10 +2370,15 @@ function assembleSignature(actor, content, ctx) {
     // The marker is where an observation adapter may insert its mechanism.
     // With the default adapter it is simply removed, so the sent message
     // contains no trace of it.
+    var sigText = esc.join('<br>');
     block = '<div style="margin-top:16px">' +
             '<!--TJG_SIG_OBSERVE-->' +
             '<p style="margin:0 0 8px 0">Best regards,</p>' +
-            '<p style="margin:0">' + esc.join('<br>') + '</p>' +
+            '<p style="margin:0">' +
+            (_wrapObserved ? '<span class="tjg-observed-signature">' : '') +
+            sigText +
+            (_wrapObserved ? '</span>' : '') +
+            '</p>' +
             '</div>';
     body = body + block;
   } else {
@@ -2446,6 +2491,22 @@ function sendZohoEmail(actor, payload) {
   payload = payload || {};
   if (!actor) throw new ApiError('UNAUTHENTICATED', 'Sign in first.');
 
+  var _cid = 'send-' + Utilities.getUuid().slice(0, 8);
+  var _t0 = new Date().getTime();
+  var _tLast = _t0;
+  function _mark(step, extra) {
+    var now = new Date().getTime();
+    var stepMs = now - _tLast;
+    var totalMs = now - _t0;
+    _tLast = now;
+    Logger.log('[' + _cid + '] STEP: ' + step + ' (+' + stepMs + 'ms, total: ' + totalMs + 'ms)' + (extra ? ' ' + JSON.stringify(extra) : ''));
+  }
+
+  var _diagObsMode = payload.observe === 'record-only' ? 'record-only'
+                   : (payload.observe === true || payload.observe === 'true') ? 'full'
+                   : 'off';
+  _mark('1_start', { obs_mode: _diagObsMode, actor_id: actor ? actor.ID : null });
+
   var to = String(payload.to || '').trim();
   var subject = String(payload.subject || '').trim();
   var content = String(payload.content || '');
@@ -2454,76 +2515,75 @@ function sendZohoEmail(actor, payload) {
   if (!isEmail(to)) throw new ApiError('VALIDATION_FAILED', 'Recipient address is not valid.');
   if (subject.length > 500) throw new ApiError('VALIDATION_FAILED', 'Subject is too long.');
   if (content.length > 200000) throw new ApiError('VALIDATION_FAILED', 'Message body is too large.');
+  _mark('2_validation_complete');
 
   // Always the caller's own mailbox; a userId in the payload is ignored.
   var box = openMailbox(actor.ID);
   var cfg = getZohoConfig();
+  _mark('3_open_mailbox_complete', { account_id_present: !!(box && box.accountId), email_present: !!(box && box.email) });
 
   // Zoho takes attachments in two steps: upload each file, then reference the
   // handles it hands back. Uploading first means a rejected file fails before
   // the message goes out, rather than sending an email that promised an
   // attachment it does not have.
   var attached = uploadAttachments(box, cfg, payload.attachments);
+  _mark('4_attachments_complete', { count: attached.length });
 
-  // The approved organisational signature, composed server-side from the
-  // sender's own record. No-op while EMAIL_SIGNATURE_ENABLED is off, so the
-  // message goes out byte-identical to before.
-  //
-  // Deliberately after the size check above: the cap protects against a large
-  // body the user typed, and a signature is a few dozen bytes the CRM added.
-  // An observation record is opened BEFORE the send, because its token has to
-  // travel inside the body. Nothing is created while observation is off, so
-  // the sheet stays empty until somebody deliberately turns it on.
-  //
-  // Three things must all be true: the signature is on, observation is
-  // configured, and THIS message asked for it. The per-message choice is the
-  // sender's — some mail should go out as ordinary mail with nothing
-  // observing it, and that has to be the easy option rather than a setting
-  // buried somewhere.
-  var wantsObservation = payload.observe === true || payload.observe === 'true';
+  // Observation is ONLY created if observe mode is 'full' or 'record-only'
+  var wantsObservation = _diagObsMode === 'full' || _diagObsMode === 'record-only';
   var observation = null;
   if (signatureEnabled() && observationEnabled() && wantsObservation) {
     try {
+      var _obsT0 = new Date().getTime();
       observation = createObservation(actor, payload.leadId, to);
+      _mark('5_create_observation_complete', { duration_ms: new Date().getTime() - _obsT0 });
     } catch (e) {
-      // Observation is instrumentation. It must never stop a message going out.
-      Logger.log('Could not open an observation record: ' + e.message);
+      Logger.log('[' + _cid + '] Could not open an observation record: ' + e.message);
     }
+  } else {
+    _mark('5_observation_skipped_for_normal_send');
   }
 
   var signatureOverride = String(payload.signatureOverride || '');
-  content = assembleSignature(actor, content, {
-    token: observation ? observation.token : '',
-    signatureOverride: signatureOverride
-  });
+  var _tokenForSig = (observation && _diagObsMode === 'full')
+                   ? observation.token : '';
+
+  // Fail-safe: if signature assembly with observation token fails (e.g. the
+  // font-face adapter throws), fall back to assembling the normal signature
+  // without any observation token. An observation error must NEVER prevent
+  // email delivery.
+  try {
+    content = assembleSignature(actor, content, {
+      token: _tokenForSig,
+      signatureOverride: signatureOverride
+    });
+    _mark('6_assemble_signature_complete', { signature_override: !!signatureOverride, token_passed: !!_tokenForSig });
+  } catch (sigErr) {
+    Logger.log('[' + _cid + '] Observation signature assembly failed, falling back to normal: ' + sigErr.message);
+    content = assembleSignature(actor, content, {
+      token: '',
+      signatureOverride: signatureOverride
+    });
+    _mark('6_assemble_signature_fallback', { error: sigErr.message });
+  }
+
+  var detectedFormat = detectMailFormat(content);
+  _mark('7_detect_format_complete', { format: detectedFormat });
 
   var sendBody = {
-    // A bare address makes the recipient's inbox show the local part of the
-    // mailbox — "dhiraj.th" — rather than a person. Every mail client renders
-    // the display name when one is supplied, and mail from a name rather than
-    // a handle also reads less like automated bulk to a spam filter.
     fromAddress: formatFromAddress(actor, box.email),
     toAddress: to,
     subject: subject,
     content: content,
-    mailFormat: detectMailFormat(content)
+    mailFormat: detectedFormat
   };
-  // Extra recipients for this message only. They are deliberately NOT written
-  // onto the lead: copying a colleague on one reply does not make them the
-  // contact for that company.
+
   var cc = normaliseRecipients(payload.cc);
   var bcc = normaliseRecipients(payload.bcc);
   if (cc) sendBody.ccAddress = cc;
   if (bcc) sendBody.bccAddress = bcc;
   if (attached.length) sendBody.attachments = attached;
 
-  // Replying to an existing message keeps it in the same thread.
-  //
-  // A "reply" sent as a brand new message starts a separate conversation in
-  // the recipient's client: they lose the history, and the thread the CRM
-  // shows stops matching the thread they see. Zoho threads a reply when it is
-  // addressed to the original message, which needs its folder as well as its
-  // id — the same pair a body fetch needs.
   var replyTo = String(payload.replyToMessageId || '');
   var sendUrl = cfg.mailHost + '/api/accounts/' + box.accountId + '/messages';
 
@@ -2535,32 +2595,95 @@ function sendZohoEmail(actor, payload) {
                 '/folders/' + encodeURIComponent(folderId) +
                 '/messages/' + encodeURIComponent(replyTo);
       sendBody.action = 'reply';
-      // Zoho supplies the quoted original; asking for it keeps the reply
-      // readable in clients that show the conversation inline.
       sendBody.mode = 'reply';
     }
-    // No folder means the original predates FolderId being recorded. Falling
-    // back to a normal send is correct: a message that does not thread is far
-    // better than one that fails to send.
+  }
+  // ── Observation diagnostics ─────────────────────────────────────────
+  var _adapterName = String(PropertiesService.getScriptProperties()
+    .getProperty('EMAIL_OBSERVATION_ADAPTER') || 'static');
+  var _contentHasImport = sendBody.content.indexOf('@import') !== -1;
+  var _contentHasFontFace = sendBody.content.indexOf('@font-face') !== -1;
+  var _contentHasObsUrl = sendBody.content.indexOf('crm.tjgroups.com/api/email-observation') !== -1;
+
+  _mark('8_send_body_built', {
+    content_len: sendBody.content.length,
+    reply_to: !!replyTo,
+    observation_requested: wantsObservation,
+    observation_created: !!observation,
+    token_exists: !!(observation && observation.token),
+    adapter: _adapterName,
+    mail_format: sendBody.mailFormat,
+    contains_import: _contentHasImport,
+    contains_font_face: _contentHasFontFace,
+    contains_obs_url: _contentHasObsUrl
+  });
+
+  // ── @import safety guard ───────────────────────────────────────────
+  // Zoho's outbound filter hangs on @import url(...). If any observation
+  // adapter accidentally introduced one, strip all observation markup and
+  // fall back to the normal signature content.
+  if (_contentHasImport && _adapterName === 'font-face') {
+    Logger.log('[' + _cid + '] SAFETY: @import detected with font-face adapter — stripping observation markup');
+    // Re-assemble signature without observation token
+    var signatureOverrideSafe = String(payload.signatureOverride || '');
+    sendBody.content = assembleSignature(actor, String(payload.content || ''), {
+      token: '',
+      signatureOverride: signatureOverrideSafe
+    });
+    _mark('8b_import_safety_fallback', { new_content_len: sendBody.content.length });
   }
 
-  var res = zohoFetch(sendUrl, {
+  var fetchOptions = {
     method: 'post',
     contentType: 'application/json',
     headers: { Authorization: 'Zoho-oauthtoken ' + box.accessToken },
     payload: JSON.stringify(sendBody),
     muteHttpExceptions: true
+  };
+
+  // Safe request inspection using UrlFetchApp.getRequest()
+  try {
+    var reqInspect = UrlFetchApp.getRequest(sendUrl, fetchOptions);
+    var inspectHeaders = [];
+    if (reqInspect && reqInspect.headers) {
+      for (var hName in reqInspect.headers) {
+        if (Object.prototype.hasOwnProperty.call(reqInspect.headers, hName)) inspectHeaders.push(hName);
+      }
+    }
+    Logger.log('[' + _cid + '] REQUEST_INSPECT: ' + JSON.stringify({
+      method: reqInspect.method,
+      url: reqInspect.url,
+      header_names: inspectHeaders,
+      payload_length: (reqInspect.payload ? String(reqInspect.payload).length : 0),
+      mail_format: sendBody.mailFormat,
+      contains_import: sendBody.content.indexOf('@import') !== -1,
+      contains_font_face: sendBody.content.indexOf('@font-face') !== -1,
+      contains_obs_url: sendBody.content.indexOf('crm.tjgroups.com/api/email-observation') !== -1
+    }));
+  } catch (inspectErr) {
+    Logger.log('[' + _cid + '] req inspect failed: ' + inspectErr.message);
+  }
+
+  _mark('9_pre_fetch_zoho');
+  var _fetchT0 = new Date().getTime();
+  var res = zohoFetch(sendUrl, fetchOptions);
+  var _fetchMs = new Date().getTime() - _fetchT0;
+  _mark('10_post_fetch_zoho', {
+    fetch_duration_ms: _fetchMs,
+    http_response_code: res ? res.getResponseCode() : null
   });
 
   var body = parseZohoJson(res, 'send');
+  _mark('11_parse_zoho_json_complete', {
+    zoho_status_code: (body && body.status) ? body.status.code : null,
+    has_data_message_id: !!(body && body.data && body.data.messageId)
+  });
+
   if (body.status && body.status.code !== 200) {
     throw new ApiError('EXTERNAL_ERROR',
       'Zoho refused the message: ' + (body.status.description || 'unknown error'));
   }
 
-  // Record it here too, so the conversation is complete in the CRM even
-  // before the next Zoho sync — and remains so if the mailbox is later
-  // cleaned out.
   try {
     var sentId = (body.data && body.data.messageId) ? String(body.data.messageId)
                                                     : 'sent-' + Utilities.getUuid();
@@ -2577,30 +2700,31 @@ function sendZohoEmail(actor, payload) {
       SentAt: new Date().toISOString(),
       SyncedAt: new Date().toISOString()
     });
+    _mark('12_append_email_log_complete');
   } catch (e) {
-    Logger.log('Could not record sent mail: ' + e.message);
+    Logger.log('[' + _cid + '] Could not record sent mail: ' + e.message);
   }
 
-  // Stitch the identifiers on now that they exist. The token had to be minted
-  // before the send; the Zoho message id only exists after it.
   if (observation) {
     try {
       updateRecordRaw('EmailObservation', observation.id, {
         MessageId: sentId || '',
         UpdatedAt: new Date().toISOString()
       });
+      _mark('13_update_observation_stitched');
     } catch (e) { /* the mail went out; a loose join is not worth failing on */ }
   }
 
-  // A draft that has now been sent is closed out rather than left dangling.
   if (payload.draftId) {
     try {
       updateRecordRaw('EmailDrafts', String(payload.draftId), {
         SentAt: new Date().toISOString()
       });
+      _mark('14_update_draft_complete');
     } catch (e) { /* the mail went out; a stale draft is not worth failing on */ }
   }
 
+  var _auditT0 = new Date().getTime();
   auditLog({
     entityId: payload.leadId || to, entityType: 'Lead', action: 'EMAIL_SENT',
     userId: actor.ID,
@@ -2609,14 +2733,20 @@ function sendZohoEmail(actor, payload) {
              (signatureOverride ? ' Signature edited for this message.' : ''),
     metadata: {
       subject: subject,
-      // Recorded because an edited signature no longer necessarily matches the
-      // authoritative user record, so it should be visible that it happened.
       signatureEdited: !!signatureOverride,
       observed: !!observation
     }
   });
+  _mark('15_audit_log_complete', { duration_ms: new Date().getTime() - _auditT0 });
 
-  return { status: 'success', from: box.email, to: to };
+  _mark('16_finish_success', { observed: !!observation, observation_mode: _diagObsMode });
+  return {
+    status: 'success',
+    from: box.email,
+    to: to,
+    observed: !!observation,
+    observationMode: _diagObsMode
+  };
 }
 
 /* ================================================================== *
@@ -2734,6 +2864,16 @@ function zohoFetch(url, options) {
   try {
     return UrlFetchApp.fetch(url, options);
   } catch (e) {
+    // ── DIAGNOSTIC: capture transport exception detail ──────────────
+    try {
+      Logger.log('DIAG_FETCH_FAIL: ' + JSON.stringify({
+        exception_name: String(e.name || ''),
+        exception_message: String(e.message || ''),
+        exception_stack: String(e.stack || '').slice(0, 500),
+        url: String(url || '')
+      }));
+    } catch (_) { /* diagnostic must never mask the real error */ }
+    // ── END DIAGNOSTIC ─────────────────────────────────────────────
     throw new ApiError('EXTERNAL_ERROR', 'Could not reach Zoho: ' + e.message);
   }
 }

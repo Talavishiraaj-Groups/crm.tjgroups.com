@@ -1,27 +1,20 @@
 /**
- * E-001 — build the probe messages.
+ * E-001 — build the probe messages for both CSS @import and @font-face.
  *
  *     node local/probe/build-probe-emails.mjs [--base https://crm.tjgroups.com]
  *
- * Writes one .html file per target client into local/probe/out/. Each carries
- * a DIFFERENT opaque label in its stylesheet URL, so the log line tells you
- * which client fetched — you are not left guessing from timing.
+ * Writes into local/probe/out/:
+ *   - V0-control.txt (plain text baseline)
+ *   - VCSS-<target>.html (CSS @import probes)
+ *   - VFONT-<target>.html (@font-face probes)
  *
- * WHAT THIS IS TESTING
- * Whether a remote stylesheet, referenced with @import and supplying text
- * through `content:` on a pseudo-element, is fetched by any mail client at
- * render time. No image, no pixel, no SVG, no web font, no wrapped link, no
- * script, no iframe, no AMP.
- *
- * WHAT IT IS NOT
- * Not a tracker. Not wired to the CRM. Not sent by the CRM. You paste these
- * into a mail client and send them by hand, so the experiment cannot
- * contaminate production sending.
- *
- * The visible fallback text matters: if the stylesheet is stripped — which is
- * the expected outcome for most clients — the recipient still sees a correct,
- * complete signature. A probe that renders as a blank space in someone's
- * inbox would be a bug, not an experiment.
+ * WHAT VFONT IS TESTING
+ * Whether a remote font referenced with @font-face { src: url(...) format("woff2") }
+ * is fetched by target email clients at render time.
+ * - No ligatures, no glyph hacks, no dynamic name generation.
+ * - Normal text body.
+ * - Normal text signature placeholder with fallback.
+ * - Remote @font-face pointing to /api/email-observation/probe/font/<token>.woff2
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -66,16 +59,11 @@ function control() {
 }
 
 /**
- * V-CSS — the candidate under test.
- *
- * The name appears TWICE by design: once as ordinary text that every client
- * will render, and once through the stylesheet. If the stylesheet is fetched
- * and applied, the pseudo-element content appears as well, which is a visible
- * second confirmation independent of the server log.
+ * V-CSS — the legacy @import candidate.
  */
 function cssImportVariant(label) {
   const href = `${BASE}/api/email-observation/sig/${label}.css`;
-  return `<!-- E-001 probe: ${label} -->
+  return `<!-- E-001 probe: ${label} (CSS @import) -->
 <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#161616">
   <p>Hi there,</p>
   <p>This is a rendering test. Nothing needs answering.</p>
@@ -95,26 +83,64 @@ function cssImportVariant(label) {
 `;
 }
 
+/**
+ * V-FONT — the @font-face candidate.
+ *
+ * Testing solely if the client issues an HTTP request for the font binary.
+ * Normal text body, normal text signature, no ligatures, no canvas, no image.
+ */
+function fontFaceVariant(label) {
+  const fontUrl = `${BASE}/api/email-observation/probe/font/${label}.woff2`;
+  return `<!-- E-001 probe: ${label} (@font-face) -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style type="text/css">
+    @font-face {
+      font-family: 'TJGProbe';
+      src: url('${fontUrl}') format('woff2');
+      font-weight: normal;
+      font-style: normal;
+    }
+    .tjg-probe-text {
+      font-family: 'TJGProbe', Arial, Helvetica, sans-serif;
+      font-size: 14px;
+      color: #161616;
+    }
+  </style>
+</head>
+<body style="margin:0;padding:16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#161616;">
+  <p>Hi there,</p>
+  <p>This is a rendering test. Nothing needs answering.</p>
+
+  <div style="margin-top:16px;">
+    <p style="margin:0 0 8px 0;">Best regards,</p>
+    <div class="tjg-probe-text">
+      <strong>Dhiraj T H</strong><br>
+      Founder<br>
+      TJGROUPS
+    </div>
+  </div>
+</body>
+</html>
+`;
+}
+
 fs.mkdirSync(OUT, { recursive: true });
 fs.writeFileSync(path.join(OUT, 'V0-control.txt'), control(), 'utf8');
 
 for (const label of TARGETS) {
   fs.writeFileSync(path.join(OUT, `VCSS-${label}.html`), cssImportVariant(label), 'utf8');
+  fs.writeFileSync(path.join(OUT, `VFONT-${label}.html`), fontFaceVariant(label), 'utf8');
 }
 
 console.log('');
 console.log('  E-001 probe messages written to local/probe/out/');
-console.log(`  Stylesheet base: ${BASE}/api/email-observation/sig/<label>.css`);
+console.log(`  Probe base: ${BASE}`);
 console.log('');
-console.log('  V0-control.txt        send as PLAIN TEXT — must produce no request');
+console.log('  V0-control.txt         send as PLAIN TEXT — must produce no request');
 for (const label of TARGETS) {
-  console.log(`  VCSS-${label}.html`.padEnd(34) + `send as HTML to your ${label} test account`);
+  console.log(`  VFONT-${label}.html`.padEnd(34) + `send as HTML to your ${label} test account`);
 }
-console.log('');
-console.log('  Then read the Vercel function logs and fill in');
-console.log('  docs/EMAIL_OBSERVATION_CLIENT_MATRIX.md.');
-console.log('');
-console.log('  Record REQUEST? YES/NO per client. Do not classify a request as');
-console.log('  human, precheck or opened — this experiment only establishes');
-console.log('  whether the mechanism executes remotely at all.');
 console.log('');

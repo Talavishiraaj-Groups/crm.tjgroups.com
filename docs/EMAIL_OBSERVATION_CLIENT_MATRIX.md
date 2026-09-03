@@ -149,13 +149,13 @@ there is nothing to send.
 
 | Client | Mechanism under test | REQUEST? | Fetched before manual open? | UA / country | Notes |
 |---|---|---|---|---|---|
-| Gmail Web | `@import` + `content:` | — | — | — | not yet run |
-| Gmail mobile | `@import` + `content:` | — | — | — | not yet run |
-| Outlook Web | `@import` + `content:` | — | — | — | not yet run |
-| Outlook Desktop / M365 | `@import` + `content:` | — | — | — | not yet run |
-| Apple Mail macOS | `@import` + `content:` | — | — | — | not yet run |
-| Apple Mail iOS | `@import` + `content:` | — | — | — | not yet run |
-| Zoho Mail | `@import` + `content:` | — | — | — | not yet run |
+| Gmail Web | `@font-face` WOFF2 | — | — | — | probe file: `VFONT-gmail-web.html` |
+| Gmail mobile | `@font-face` WOFF2 | — | — | — | probe file: `VFONT-gmail-mobile.html` |
+| Outlook Web | `@font-face` WOFF2 | — | — | — | probe file: `VFONT-outlook-web.html` |
+| Outlook Desktop / M365 | `@font-face` WOFF2 | — | — | — | probe file: `VFONT-outlook-desktop.html` |
+| Apple Mail macOS | `@font-face` WOFF2 | — | — | — | probe file: `VFONT-apple-mail-macos.html` |
+| Apple Mail iOS | `@font-face` WOFF2 | — | — | — | probe file: `VFONT-apple-mail-ios.html` |
+| Zoho Mail | `@font-face` WOFF2 | — | — | — | probe file: `VFONT-zoho-mail.html` |
 | **V0 control (plain text)** | none | **must be NO** | — | — | if this fetches, the experiment is broken |
 
 ---
