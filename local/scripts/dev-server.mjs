@@ -36,6 +36,24 @@ const DATA_FILE = argOf('data', null);
 const ITERATIONS = argOf('iterations', '200'); // keep local logins fast
 
 /**
+ * The outbound signature, on by default HERE only.
+ *
+ * Production defaults to off so an upgrade cannot change outbound mail as a
+ * side effect. The local sandbox exists to exercise the feature, so it starts
+ * on; `--signature off` turns it back off to check that a disabled flag really
+ * does leave messages untouched.
+ */
+const SIGNATURE_FLAG =
+  String(argOf('signature', 'on')).toLowerCase() === 'off' ? 'false' : 'true';
+
+/**
+ * Render observation, on by default HERE only so the composer's per-message
+ * choice can be exercised. `--observation off` turns it off.
+ */
+const OBSERVATION_FLAG =
+  String(argOf('observation', 'on')).toLowerCase() === 'off' ? 'false' : 'true';
+
+/**
  * The backend's clock. Defaults to now so it agrees with the browser;
  * `--now 2026-01-05T09:00:00Z` pins it to reproduce a date-specific bug.
  */
@@ -75,6 +93,26 @@ be = loadBackend({
     ZOHO_CLIENT_SECRET: 'LOCAL_TEST_CLIENT_SECRET',
     PASSWORD_ITERATIONS: ITERATIONS,
     ENVIRONMENT: 'test',
+    // ON in the local sandbox, OFF in production.
+    //
+    // Local exists to exercise the feature; production defaults to off so an
+    // upgrade never changes outbound mail as a side effect. The flag is read
+    // per request, so `--signature off` turns it back off here without a
+    // restart of anything but this server.
+    EMAIL_SIGNATURE_ENABLED: SIGNATURE_FLAG,
+    SIGNATURE_ORG_NAME: 'TJGROUPS',
+    // Render observation, on HERE so the composer's per-message choice can
+    // actually be exercised. Production defaults to off.
+    //
+    // The whole point is unproven — no mail client is known to fetch the
+    // stylesheet this embeds. Locally you can verify the plumbing: a record is
+    // opened, a token is embedded, a fetch is classified and counted. Whether
+    // Gmail or Outlook ever issues that fetch can only be answered by real
+    // mail to real accounts.
+    EMAIL_OBSERVATION_ENABLED: OBSERVATION_FLAG,
+    EMAIL_OBSERVATION_ADAPTER: OBSERVATION_FLAG === 'true' ? 'css-import' : 'static',
+    EMAIL_OBSERVATION_BASE_URL: `http://localhost:${PORT}`,
+    EMAIL_OBSERVATION_EDGE_SECRET: 'local-dev-edge-secret',
   },
   zoho: { clientId: 'LOCAL_TEST_CLIENT_ID', clientSecret: 'LOCAL_TEST_CLIENT_SECRET' },
   // Run on the REAL clock, unlike the test harness.

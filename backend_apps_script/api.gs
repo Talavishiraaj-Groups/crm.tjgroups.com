@@ -120,7 +120,7 @@ var BATCHABLE_ACTIONS = [
   'getUsers', 'getLeads', 'getLeadById', 'getDeals', 'getProjects',
   'getAdminRequests', 'getCommissions', 'getKPIs', 'getLogs',
   'getActivityFeed', 'getProductivity', 'getAnalytics',
-  'getStoredEmails', 'getEmailDrafts', 'getEmailAnalytics',
+  'getStoredEmails', 'getEmailDrafts', 'getEmailAnalytics', 'getSignaturePreview', 'getEmailObservations',
   'getUnmatchedEmails', 'getDeletedLeads', 'getTeamOverview'
 ];
 
@@ -426,6 +426,15 @@ function dispatch(action, payload, actor, e, body) {
 
     case 'getStoredEmails':
       return getStoredEmails(actor, payload);
+
+    case 'getEmailObservations':
+      return getEmailObservations(actor, payload);
+
+    case 'getSignaturePreview':
+      return getSignaturePreview(actor, payload);
+
+    case 'recordObservationFetch':
+      return recordObservationFetch(payload);
 
     case 'getEmailContent':
       return getEmailContent(actor, payload);

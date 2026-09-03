@@ -1,0 +1,17 @@
+<!-- E-001 probe: outlook-web -->
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#161616">
+  <p>Hi there,</p>
+  <p>This is a rendering test. Nothing needs answering.</p>
+
+  <style>@import url("https://crm.tjgroups.com/api/email-observation/sig/outlook-web.css");</style>
+
+  <div style="margin-top:16px">
+    <p style="margin:0 0 8px 0">Best regards,</p>
+    <!-- Static fallback: correct and complete if the stylesheet never loads. -->
+    <p style="margin:0">Dhiraj T H<br>Founder<br>TJGROUPS</p>
+    <!-- Populated only if the remote stylesheet is fetched AND applied. -->
+    <p style="margin:8px 0 0 0;color:#888">
+      resolved: <span class="tjg-sig-name"></span> / <span class="tjg-sig-title"></span>
+    </p>
+  </div>
+</div>

@@ -10,7 +10,7 @@ import {
   ExternalLink, ShieldAlert, Pencil, Trash2
 } from 'lucide-react';
 import { STATUS_BADGE } from '../utils/badges';
-import { ZohoEmailViewer } from '../components/zoho/ZohoEmailViewer';
+import { ZohoEmailViewer, type MessageObservation } from '../components/zoho/ZohoEmailViewer';
 import { EmailComposer } from '../components/zoho/EmailComposer';
 import { EditLeadModal } from '../components/leads/EditLeadModal';
 import { DeleteLeadModal } from '../components/leads/DeleteLeadModal';
@@ -63,6 +63,10 @@ export const LeadDetail: React.FC = () => {
   const [zohoExpired, setZohoExpired] = useState<string | null>(null);
   /** Why the lead could not be read — as opposed to the lead not existing. */
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** What the CRM observed happening to each sent message, keyed by message id. */
+  const [observations, setObservations] = useState<Record<string, MessageObservation>>({});
+  /** The message being replied to, so the reply stays in its thread. */
+  const [replyTo, setReplyTo] = useState<{ messageId: string; subject: string; sender: string } | null>(null);
   const [isFetchingZoho, setIsFetchingZoho] = useState(false);
   const [showMandatoryFollowUpPrompt, setShowMandatoryFollowUpPrompt] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -183,6 +187,10 @@ export const LeadDetail: React.FC = () => {
           // The archived conversation comes along for free. Only the live
           // Zoho sync, which reaches an external service, stays out of band.
           { key: 'stored', action: 'getStoredEmails', payload: { leadId: id } },
+          // Rides the same batch, so knowing what happened to each message
+          // costs no extra round trip. Scoped server-side: a rep sees their
+          // own, a manager sees their team's.
+          { key: 'observations', action: 'getEmailObservations', payload: { leadId: id } },
         ]);
 
         // "The request failed" and "the record is gone" are different facts and
@@ -200,6 +208,8 @@ export const LeadDetail: React.FC = () => {
         const requestsData = got.get<Record<string, unknown>[]>('requests', []).map(api.map.adminRequest);
         const usersData = got.get<Record<string, unknown>[]>('users', []).map(api.map.user);
         const storedEmails = got.get<Record<string, unknown>[]>('stored', []).map(api.map.storedEmail);
+        const obs = got.get<{ observations?: Record<string, MessageObservation> }>('observations', {});
+        setObservations(obs?.observations || {});
 
         setUsers(usersData);
         setZohoEmails(storedEmails);
@@ -931,6 +941,12 @@ export const LeadDetail: React.FC = () => {
                     crmLogs={logs}
                     onRefresh={refreshZohoEmails}
                     isRefreshing={isFetchingZoho}
+                    observations={observations}
+                    onReply={(item) => setReplyTo({
+                      messageId: item.messageId || item.id,
+                      subject: item.subject || '',
+                      sender: item.sender || '',
+                    })}
                   />
                 )}
               </div>
@@ -964,7 +980,10 @@ export const LeadDetail: React.FC = () => {
                     leadId={lead.id}
                     leadEmail={lead.email}
                     leadName={lead.name}
+                    replyTo={replyTo}
+                    onClearReply={() => setReplyTo(null)}
                     onSent={() => {
+                      setReplyTo(null);
                       // The backend already logged EMAIL_SENT and archived the
                       // message; reload so both show up here.
                       setShowMandatoryFollowUpPrompt(true);

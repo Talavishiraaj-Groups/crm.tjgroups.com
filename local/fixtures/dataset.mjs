@@ -65,6 +65,10 @@ export const USERS = [
     ID: ID.superAdmin, Username: 'super_admin', Role: 'SUPER_ADMIN', Team: 'Management',
     Status: 'Active', Availability: 'Available', ZohoEmail: 'super@tjgroups.test',
     ZohoRefreshToken: '', CreatedAt: T0, UpdatedAt: T0,
+    // A DisplayName and a JOB TITLE, so the local sandbox exercises the
+    // signature the way production will. SignatureTitle is deliberately not
+    // Role: Role here is SUPER_ADMIN, which nobody signs a letter with.
+    DisplayName: 'Dhiraj T H', SignatureTitle: 'Founder',
   },
   {
     ID: ID.adminAlpha, Username: 'admin_alpha', Role: 'ADMIN', Team: 'Alpha',
@@ -80,6 +84,7 @@ export const USERS = [
     ID: ID.repAlpha1, Username: 'sales_rep_1', Role: 'SALES_REP', Team: 'Alpha',
     Status: 'Active', Availability: 'Available', ZohoEmail: '', ZohoRefreshToken: '',
     CreatedAt: T0, UpdatedAt: T0,
+    DisplayName: 'Dolapo Busari', SignatureTitle: 'Sales Development Representative',
   },
   {
     ID: ID.repAlpha2, Username: 'sales_rep_2', Role: 'SALES_REP', Team: 'Alpha',

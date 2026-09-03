@@ -4,10 +4,17 @@
 the recipient renders the message*, delivering server-originated **text**, without
 using an image, SVG, tracking pixel, wrapped link, JavaScript, iframe, or AMP?
 
-**Answer: no. There is no such mechanism in any major email client.**
+**Answer: no validated universal mechanism exists** under these constraints and
+the documented target matrix.
 
 This document records why, mechanism by mechanism, so the question does not have
 to be re-opened from scratch.
+
+> **One row is under active measurement.** An earlier revision of this document
+> recorded `@import` (row 5) as stripped and marked the whole matrix "N/A —
+> nothing to send". That was an assertion, not a measurement, and the matrix
+> then recorded the assumption as a result. Experiment **E-001** exists to
+> settle it. Until it reports, row 5 is **untested**, not closed — see §6.
 
 ---
 
@@ -23,7 +30,7 @@ exhaustive for HTML email as the format is actually implemented.
 | 2 | CSS `background-image: url()` | Yes | Only as pixels | Excluded (§15) — still an image |
 | 3 | `@font-face { src: url() }` | Yes | **No** — carries glyph outlines, not content | Excluded (§15), and cannot express a name |
 | 4 | `<link rel="stylesheet">` | — | CSS `content:` could in principle | **Stripped by Gmail, Outlook, Apple Mail.** No request is ever made |
-| 5 | CSS `@import url()` | — | As above | Stripped with the rest of remote CSS |
+| 5 | CSS `@import url()` | ? | **Yes**, via `content:` on a pseudo-element | **UNDER TEST — E-001.** The only candidate matching the requirement exactly |
 | 6 | `<iframe>` / `<object>` / `<embed>` | Yes | Yes | Excluded (§15) and stripped by every major client |
 | 7 | JavaScript `fetch` / `XMLHttpRequest` | Yes | Yes | `<script>` is removed before render, everywhere |
 | 8 | WebSocket | Yes | Yes | Requires JavaScript. Same removal |
@@ -85,9 +92,14 @@ server-side at send time from the authoritative `Users` record:
 Best regards,
 
 Dhiraj T H          ← Users.DisplayName
-Founder             ← Users.Role
-TJGROUPS
+Founder             ← Users.SignatureTitle
+TJGROUPS            ← SIGNATURE_ORG_NAME
 ```
+
+> **Not `Users.Role`.** An earlier revision of this document said `Founder ←
+> Users.Role`. `Role` is the RBAC role — `SUPER_ADMIN`, `ADMIN`, `SALES_REP`,
+> `SETTER` — so following that literally signs real mail to a prospect
+> "SALES_REP". `Users.SignatureTitle` was added for this and nothing else.
 
 Another user sending the same email gets their own approved signature. Nothing
 is hardcoded, nothing is derived from an email address when a `DisplayName`
@@ -135,12 +147,55 @@ No mechanism reached the point of being worth testing against live clients. The
 matrix below is therefore recorded as **not applicable**, rather than untested —
 there is nothing to send.
 
-| Client | Mechanism under test | Result |
-|---|---|---|
-| Gmail Web / mobile | none qualifying | N/A — no candidate |
-| Outlook Web / Desktop / M365 | none qualifying | N/A — no candidate |
-| Apple Mail macOS / iOS | none qualifying | N/A — no candidate |
-| Zoho Mail | none qualifying | N/A — no candidate |
-| Defender / Proofpoint / Mimecast / Barracuda | none qualifying | N/A — no candidate |
+| Client | Mechanism under test | REQUEST? | Fetched before manual open? | UA / country | Notes |
+|---|---|---|---|---|---|
+| Gmail Web | `@import` + `content:` | — | — | — | not yet run |
+| Gmail mobile | `@import` + `content:` | — | — | — | not yet run |
+| Outlook Web | `@import` + `content:` | — | — | — | not yet run |
+| Outlook Desktop / M365 | `@import` + `content:` | — | — | — | not yet run |
+| Apple Mail macOS | `@import` + `content:` | — | — | — | not yet run |
+| Apple Mail iOS | `@import` + `content:` | — | — | — | not yet run |
+| Zoho Mail | `@import` + `content:` | — | — | — | not yet run |
+| **V0 control (plain text)** | none | **must be NO** | — | — | if this fetches, the experiment is broken |
 
-This table becomes live the moment a qualifying adapter is proposed.
+---
+
+## 6. E-001 — how to run it
+
+```
+node local/probe/build-probe-emails.mjs
+```
+
+Writes one message per client to `local/probe/out/`, each carrying a different
+opaque label so a log line identifies its own client. Send each by hand from
+any mail client — **not** through the CRM, so production sending cannot be
+contaminated. Then read the Vercel function logs and fill in the table above.
+
+The endpoint is `api/email-observation/sig/[token].js`, served from the
+existing CRM origin at `/api/email-observation/sig/<label>.css`. It needs no
+DNS change and no `vercel.json` change: Vercel resolves `/api/*` before the
+SPA catch-all rewrite.
+
+**Each probe message carries a complete static signature as well.** If the
+stylesheet is stripped — the expected outcome for most clients — the recipient
+still sees a correct sign-off. A probe that renders as a blank gap in
+someone's inbox would be a defect, not an experiment.
+
+### What this experiment does and does not answer
+
+It answers exactly one question: **does any target client issue the request?**
+
+It does **not** establish that a request means a human opened the message. Do
+not record a fetch as `human`, `precheck`, or `opened`. If requests do appear,
+a second experiment is needed to test whether timing, network class and
+sequence can separate prefetch from human rendering — and Apple Mail's Privacy
+Protection fetches remote content in the background regardless of engagement,
+so a request from that client would carry very little information about a
+person.
+
+### Outcomes
+
+- **No client requests it** → record `NO_REMOTE_EXECUTION`, and Phase 2 closes
+  on evidence rather than assumption.
+- **One or more clients request it** → preserve the raw log, stop, and do not
+  build production observation logic until the follow-up experiment reports.

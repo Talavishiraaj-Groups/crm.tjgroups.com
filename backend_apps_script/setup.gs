@@ -51,7 +51,18 @@ var DATABASE_SCHEMA = {
     // are login handles — "dhiraj_th" is not how anyone signs a letter, and
     // outbound mail was showing exactly that. Blank falls back to a tidied
     // username, so this needs filling in only where that is not good enough.
-    'DisplayName'
+    'DisplayName',
+    // [ADDED] the JOB TITLE printed under the name in an outbound signature —
+    // "Founder", "Sales Development Representative".
+    //
+    // Deliberately NOT Users.Role. Role is the RBAC role (SUPER_ADMIN, ADMIN,
+    // SALES_REP, SETTER); composing a signature from it would sign real mail
+    // to a prospect "SALES_REP". There is no other field carrying a title, so
+    // this one exists. Blank omits the line rather than printing an empty one.
+    'SignatureTitle',
+    // [ADDED] per-user opt out. Blank counts as enabled, so existing rows need
+    // no edit; only somebody who wants no signature has to set it.
+    'SignatureEnabled'
   ],
 
   'Leads': [
@@ -146,6 +157,34 @@ var DATABASE_SCHEMA = {
   // somebody actually opens that message.
   'EmailBodies': [
     'ID', 'MessageId', 'Body', 'BodyComplete', 'StoredAt'
+  ],
+
+  // [ADDED] one row per outbound message that carries an observation token.
+  //
+  // Written only while EMAIL_OBSERVATION_ENABLED is on, which is off by
+  // default. Whether any mail client actually fetches the stylesheet the token
+  // names is UNMEASURED — see docs/EMAIL_OBSERVATION_CLIENT_MATRIX.md. An
+  // empty sheet after real sends is itself the experiment's result.
+  //
+  // State is deliberately NOT a boolean "Opened". A fetch is evidence that
+  // something rendered the message; it is not proof a person read it.
+  'EmailObservation': [
+    'ID', 'EmailLogId', 'MessageId', 'LeadId', 'UserId', 'Token',
+    'State', 'FirstObservedAt', 'LastObservedAt', 'ObservationCount',
+    'HighestConfidence', 'NotificationState', 'CreatedAt', 'UpdatedAt'
+  ],
+
+  // [ADDED] the evidence ledger: one row per observed fetch, never overwritten.
+  //
+  // SequenceNumber is what makes the first-fetch/second-fetch question
+  // testable. It is recorded as a FEATURE — the classifier may weigh it — and
+  // never as a rule that fetch 1 is a machine and fetch 2 is a human. A second
+  // fetch can equally be a cache refresh, another device, a forward, or a
+  // re-scan. Raw evidence is kept separate from classification so a
+  // reclassification never destroys what was actually seen.
+  'EmailObservationEvent': [
+    'ID', 'ObservationId', 'SequenceNumber', 'ObservedAt',
+    'SourceClass', 'Confidence', 'Evidence', 'CreatedAt'
   ],
 
   // [ADDED] saved email drafts, per user per lead.
@@ -821,7 +860,14 @@ function selfCheck() {
     // scheduled mailbox sync
     'syncMailboxForUser', 'syncAllMailboxes', 'syncAllMailboxesAction',
     'installMailSyncTrigger', 'removeMailSyncTrigger', 'mailSyncStatus',
-    'readMailSyncState', 'writeMailSyncState', 'newSyncContext'
+    'readMailSyncState', 'writeMailSyncState', 'newSyncContext',
+    // outbound signature
+    'assembleSignature', 'signatureLinesFor', 'getSignaturePreview',
+    'signatureObservationAdapter', 'signatureEnabled', 'escapeHtml',
+    // render observation
+    'mintObservationToken', 'verifyObservationToken', 'createObservation',
+    'recordObservationFetch', 'classifyObservationFetch', 'observationEnabled',
+    'getEmailObservations', 'normaliseRecipients'
   ];
 
   var missingFns = [];
@@ -863,7 +909,16 @@ function selfCheck() {
      typeof DATABASE_SCHEMA !== 'undefined' &&
        DATABASE_SCHEMA.EmailLog.indexOf('FolderId') !== -1, 'setup.gs'],
     ['ACTION_POLICY.syncAllMailboxes',
-     typeof ACTION_POLICY !== 'undefined' && !!ACTION_POLICY.syncAllMailboxes, 'utils.gs']
+     typeof ACTION_POLICY !== 'undefined' && !!ACTION_POLICY.syncAllMailboxes, 'utils.gs'],
+    ['ACTION_POLICY.getSignaturePreview',
+     typeof ACTION_POLICY !== 'undefined' && !!ACTION_POLICY.getSignaturePreview, 'utils.gs'],
+    ['Users.SignatureTitle in schema',
+     typeof DATABASE_SCHEMA !== 'undefined' &&
+       DATABASE_SCHEMA.Users.indexOf('SignatureTitle') !== -1, 'setup.gs'],
+    ['ACTION_POLICY.recordObservationFetch',
+     typeof ACTION_POLICY !== 'undefined' && !!ACTION_POLICY.recordObservationFetch, 'utils.gs'],
+    ['EmailObservation sheet in schema',
+     typeof DATABASE_SCHEMA !== 'undefined' && !!DATABASE_SCHEMA.EmailObservation, 'setup.gs']
   ];
 
   var staleFiles = [];

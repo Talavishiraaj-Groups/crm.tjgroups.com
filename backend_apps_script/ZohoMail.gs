@@ -740,7 +740,39 @@ function getStoredEmails(actor, params) {
     return Date.parse(b.SentAt || 0) - Date.parse(a.SentAt || 0);
   });
 
-  return stripAll(out);
+  out = stripAll(out);
+
+  // Carry the bodies the CRM already holds.
+  //
+  // Opening a message used to cost a whole extra request — and on Apps Script
+  // that is roughly three seconds however little work it does, even when the
+  // text was sitting in EmailBodies the entire time. The archive read is
+  // already happening, so the bodies ride along with it and expanding a
+  // message becomes instant with no round trip at all.
+  //
+  // Only bodies stored COMPLETE are attached: a partial one would render as a
+  // full message that quietly stops mid-sentence, which is worse than fetching.
+  try {
+    var bodies = getRecordsRaw('EmailBodies');
+    var byMessage = {};
+    for (var b = 0; b < bodies.length; b++) {
+      if (!isTrueFlag(bodies[b].BodyComplete)) continue;
+      byMessage[String(bodies[b].MessageId)] = String(bodies[b].Body || '');
+    }
+    for (var k = 0; k < out.length; k++) {
+      var cached = byMessage[String(out[k].MessageId)];
+      if (cached) {
+        out[k].Body = cached;
+        out[k].BodyComplete = true;
+      }
+    }
+  } catch (e) {
+    // A missing or unreadable EmailBodies sheet must not break the
+    // conversation list. The viewer falls back to fetching on demand.
+    Logger.log('Could not attach cached bodies: ' + e.message);
+  }
+
+  return out;
 }
 
 /**
@@ -1776,6 +1808,582 @@ function prettifyUsername(username) {
   return out.join(' ');
 }
 
+/* ================================================================== *
+ * Outbound signature
+ * ================================================================== */
+
+/**
+ * The organisation line printed under the sender. Configurable without a
+ * paste, because it is branding rather than logic.
+ */
+function signatureOrgName() {
+  return PropertiesService.getScriptProperties()
+    .getProperty('SIGNATURE_ORG_NAME') || 'TJGROUPS';
+}
+
+/** Off by default: enabling it must be a decision, not an upgrade side effect. */
+function signatureEnabled() {
+  return String(PropertiesService.getScriptProperties()
+    .getProperty('EMAIL_SIGNATURE_ENABLED') || '').toLowerCase() === 'true';
+}
+
+/**
+ * Observation adapters.
+ *
+ * The registry exists so a mechanism that passes the client matrix can be
+ * inserted without touching the composer, the send path, EmailLog or the UI.
+ * Only `static` is registered, and it returns the content untouched.
+ *
+ * There is no image, pixel, SVG, remote stylesheet, web font, wrapped link or
+ * AMP adapter here, and none may be added as a substitute for the mechanism
+ * that was actually asked for. See docs/EMAIL_OBSERVATION_CLIENT_MATRIX.md.
+ */
+var SIGNATURE_OBSERVATION_ADAPTERS = {
+  /** Sends a correct signature and observes nothing. Always the safe default. */
+  'static': function (content) { return content; },
+
+  /**
+   * Remote stylesheet, resolving the sender's name through `content:` on a
+   * pseudo-element.
+   *
+   * This is the only mechanism that matches the requirement as stated:
+   * server-resolved TEXT at render time, with no image, pixel, SVG, web font,
+   * wrapped link, script, iframe or AMP part.
+   *
+   * WHETHER ANY CLIENT FETCHES IT IS UNMEASURED. Gmail and Outlook are
+   * documented not to honour `@import` in message HTML; Apple Mail is WebKit
+   * and might. Enabling this adapter is how that gets measured with real mail.
+   *
+   * Two properties make it safe to try:
+   *   - the static signature is ALSO present, so a client that strips the
+   *     stylesheet still shows a correct, complete sign-off;
+   *   - HTML only. A plaintext message is left alone rather than being
+   *     converted, because converting every message to HTML is a change this
+   *     codebase deliberately reversed once already.
+   */
+  'css-import': function (content, ctx) {
+    if (!ctx || !ctx.token) return content;
+    // A <style> block only exists in HTML. Refusing here rather than
+    // upgrading the message is what keeps plaintext plaintext.
+    if (detectMailFormat(content) !== 'html') return content;
+
+    var href = observationBaseUrl() +
+               '/api/email-observation/sig/' + encodeURIComponent(ctx.token) + '.css';
+
+    return content.replace(
+      '<!--TJG_SIG_OBSERVE-->',
+      '<style>@import url("' + href + '");</style>'
+    );
+  }
+};
+
+function signatureObservationAdapter() {
+  var name = String(PropertiesService.getScriptProperties()
+    .getProperty('EMAIL_OBSERVATION_ADAPTER') || 'static');
+  return SIGNATURE_OBSERVATION_ADAPTERS[name] ||
+         SIGNATURE_OBSERVATION_ADAPTERS['static'];
+}
+
+function observationEnabled() {
+  return String(PropertiesService.getScriptProperties()
+    .getProperty('EMAIL_OBSERVATION_ENABLED') || '').toLowerCase() === 'true';
+}
+
+/**
+ * The signature for one sender, from the authoritative user record.
+ *
+ * Name resolution is shared with formatFromAddress() on purpose — the From
+ * header and the sign-off must never disagree about who sent the message.
+ *
+ * Returns '' when there is nothing worth printing, so a caller can skip the
+ * separator entirely rather than appending a bare "Best regards,".
+ */
+function signatureLinesFor(actor) {
+  if (!actor) return [];
+  var row = getRecordByIdRaw('Users', actor.ID);
+  if (!row) return [];
+  if (isFalseFlag(row.SignatureEnabled)) return [];
+
+  var name = String(row.DisplayName || '').trim() || prettifyUsername(row.Username);
+  if (!name) return [];
+
+  var lines = [name];
+  // Blank title omits the line. An empty row in a signature reads as a defect.
+  var title = String(row.SignatureTitle || '').trim();
+  if (title) lines.push(title);
+
+  var org = signatureOrgName();
+  if (org) lines.push(org);
+  return lines;
+}
+
+/* ================================================================== *
+ * Email render observation
+ *
+ * WHAT THIS IS
+ * A per-message opaque token is embedded in the signature. If the recipient's
+ * client fetches the stylesheet it names, the edge records the request and
+ * tells the CRM. The CRM classifies the request and, only when the evidence
+ * supports it, reports a likely render.
+ *
+ * WHAT THIS IS NOT
+ * A fetch is NOT proof a person read the message. It may be a security
+ * gateway, an image/content proxy, a cache refresh, a second device, or a
+ * forward. The state machine reflects that, and there is deliberately no
+ * boolean "Opened" anywhere in it.
+ *
+ * WHETHER THE MECHANISM FIRES AT ALL IS UNMEASURED. See
+ * docs/EMAIL_OBSERVATION_CLIENT_MATRIX.md. The first real sends are the
+ * experiment.
+ * ================================================================== */
+
+/** Observation states. Ordered by how much they justify telling a person. */
+var OBSERVATION_STATES = {
+  SENT: 'SENT',
+  DELIVERY_UNKNOWN: 'DELIVERY_UNKNOWN',
+  MACHINE_FETCHED: 'MACHINE_FETCHED',
+  PROXY_FETCHED: 'PROXY_FETCHED',
+  RENDER_UNCERTAIN: 'RENDER_UNCERTAIN',
+  LIKELY_RENDERED: 'LIKELY_RENDERED',
+  CONFIRMED_ENGAGEMENT: 'CONFIRMED_ENGAGEMENT',
+  NO_RENDER_SIGNAL: 'NO_RENDER_SIGNAL',
+  EXPIRED: 'EXPIRED'
+};
+
+function observationBaseUrl() {
+  return (PropertiesService.getScriptProperties()
+    .getProperty('EMAIL_OBSERVATION_BASE_URL') || 'https://crm.tjgroups.com')
+    .replace(/\/+$/, '');
+}
+
+/**
+ * Shared secret between the CRM and the observation edge.
+ *
+ * The edge is a public HTTP endpoint that mail clients reach without any CRM
+ * session, so it cannot authenticate as a user. It presents this instead.
+ * Absent means the ingestion action refuses everything, which is the correct
+ * default for a secret that has not been configured.
+ */
+function observationEdgeSecret() {
+  return PropertiesService.getScriptProperties()
+    .getProperty('EMAIL_OBSERVATION_EDGE_SECRET') || '';
+}
+
+/**
+ * Sign an observation id into an opaque token.
+ *
+ * The token carries the observation id and nothing else — no address, no lead,
+ * no company, no sender name. Everything else is resolved server-side from the
+ * id. A URL ends up in proxy logs, security tooling and browser history, so it
+ * must not describe who the message was for.
+ */
+function mintObservationToken(observationId) {
+  var sig = bytesToHex(Utilities.computeHmacSha256Signature(
+    'obs|' + observationId, getPasswordPepper()
+  )).slice(0, 24);
+  return observationId + '.' + sig;
+}
+
+/** @return {string} the observation id, or '' if the token is not ours. */
+function verifyObservationToken(token) {
+  var parts = String(token || '').split('.');
+  if (parts.length !== 2) return '';
+  var id = parts[0];
+  // Recomputed rather than compared field by field: a token whose signature
+  // does not match its own id was not issued here.
+  return mintObservationToken(id) === String(token) ? id : '';
+}
+
+/**
+ * Open an observation record for a message about to be sent.
+ *
+ * Created BEFORE the send, because the token has to be inside the body. The
+ * Zoho message id and the EmailLog row only exist afterwards, so they are
+ * stitched on once the send returns.
+ */
+function createObservation(actor, leadId, toAddress) {
+  var now = new Date().toISOString();
+  var row = appendRecordRaw('EmailObservation', {
+    EmailLogId: '',
+    MessageId: '',
+    LeadId: String(leadId || ''),
+    UserId: actor ? actor.ID : '',
+    Token: '',
+    State: OBSERVATION_STATES.SENT,
+    FirstObservedAt: '',
+    LastObservedAt: '',
+    ObservationCount: 0,
+    HighestConfidence: '',
+    NotificationState: 'none',
+    CreatedAt: now,
+    UpdatedAt: now
+  });
+
+  var token = mintObservationToken(String(row.ID));
+  updateRecordRaw('EmailObservation', row.ID, { Token: token });
+  return { id: String(row.ID), token: token };
+}
+
+/**
+ * Observation state for a lead's messages, scoped to who may see it.
+ *
+ * The person who sent a message always sees what happened to it. A Super
+ * Admin sees everyone's; an Admin sees their team's. That is the same rule
+ * `mailVisibleUserIds` already applies to the mail itself, reused deliberately
+ * — if you can read the message you can read what happened to it, and if you
+ * cannot, neither.
+ *
+ * Returns a map keyed by MessageId so the viewer can annotate a conversation
+ * without a second lookup per row.
+ */
+function getEmailObservations(actor, params) {
+  params = params || {};
+  if (!actor) throw new ApiError('UNAUTHENTICATED', 'Sign in first.');
+
+  var leadId = String(params.leadId || '');
+  // Reading a lead's observations requires the right to read the lead.
+  if (leadId) getScopedRecordById('Leads', leadId, 'getLeadById', actor);
+
+  var allowed = mailVisibleUserIds(actor);
+  var rows = getRecordsRaw('EmailObservation');
+  var out = {};
+
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (leadId && String(r.LeadId) !== leadId) continue;
+    // null means "everything", for a Super Admin.
+    if (allowed !== null && allowed.indexOf(String(r.UserId)) === -1) continue;
+
+    var key = String(r.MessageId || '');
+    if (!key) continue;
+
+    out[key] = {
+      state: String(r.State || 'SENT'),
+      observationCount: Number(r.ObservationCount || 0),
+      firstObservedAt: String(r.FirstObservedAt || ''),
+      lastObservedAt: String(r.LastObservedAt || ''),
+      // Deliberately NOT a boolean "opened". A fetch is evidence that
+      // something rendered the message, not proof a person read it.
+      userId: String(r.UserId || '')
+    };
+  }
+
+  return { observations: out };
+}
+
+/**
+ * Classify one fetch.
+ *
+ * Deterministic rules only. There are no tuned weights here, because there is
+ * no labelled data to tune them against — inventing coefficients before
+ * collecting evidence would produce confident numbers that mean nothing.
+ *
+ * The sequence number is recorded and MAY raise confidence, but there is
+ * deliberately no rule that "fetch 1 is a machine and fetch 2 is a human". A
+ * second fetch is equally a cache refresh, a second device, a forward, or a
+ * re-scan.
+ *
+ * @return {{state:string, confidence:number, reason:string}}
+ */
+function classifyObservationFetch(evidence, sequenceNumber, secondsSinceSend) {
+  var ua = String(evidence.ua || '').toLowerCase();
+
+  // Known automated fetchers, by their own self-identification. Not proof —
+  // a User-Agent is client-supplied — but a strong and cheap first filter.
+  if (ua.indexOf('googleimageproxy') !== -1 || ua.indexOf('via ggpht') !== -1) {
+    return { state: OBSERVATION_STATES.PROXY_FETCHED, confidence: 0.99,
+             reason: 'Google image/content proxy' };
+  }
+  if (ua.indexOf('applemail') !== -1 || ua.indexOf('icloud') !== -1 ||
+      String(evidence.applePrivacyRelay || '') === 'true') {
+    // Apple fetches remote content in the background whether or not anybody
+    // opened the message, so this can never count towards a human render.
+    return { state: OBSERVATION_STATES.PROXY_FETCHED, confidence: 0.99,
+             reason: 'Apple Mail Privacy Protection' };
+  }
+  if (ua.indexOf('proofpoint') !== -1 || ua.indexOf('mimecast') !== -1 ||
+      ua.indexOf('barracuda') !== -1 || ua.indexOf('microsoft') !== -1 ||
+      ua.indexOf('bot') !== -1 || ua.indexOf('scanner') !== -1 ||
+      ua.indexOf('crawler') !== -1) {
+    return { state: OBSERVATION_STATES.MACHINE_FETCHED, confidence: 0.9,
+             reason: 'security gateway or scanner' };
+  }
+
+  // Arriving within seconds of the send is characteristic of a gateway
+  // scanning the message on the way in, not of somebody reading it.
+  if (secondsSinceSend !== null && secondsSinceSend >= 0 && secondsSinceSend < 15) {
+    return { state: OBSERVATION_STATES.MACHINE_FETCHED, confidence: 0.7,
+             reason: 'arrived inside the automated-scan window' };
+  }
+
+  // Everything else is genuinely unknown. It is NOT reported as a render.
+  // Calling an unclassifiable request a human open is the failure this whole
+  // state machine exists to avoid.
+  if (!ua) {
+    return { state: OBSERVATION_STATES.RENDER_UNCERTAIN, confidence: 0.3,
+             reason: 'no client identification' };
+  }
+
+  return {
+    state: OBSERVATION_STATES.RENDER_UNCERTAIN,
+    confidence: 0.5,
+    reason: 'unrecognised source; needs E-001 data before this can be ' +
+            'promoted to a likely render'
+  };
+}
+
+/**
+ * Record a fetch reported by the observation edge.
+ *
+ * Called by the public edge function, NOT by a signed-in user — a mail client
+ * has no CRM session. It authenticates with a shared secret instead, and does
+ * nothing at all if that secret has not been configured.
+ *
+ * Returns the sender's signature lines so the edge can serve them, which keeps
+ * the whole thing to one round trip.
+ */
+function recordObservationFetch(params) {
+  params = params || {};
+
+  var secret = observationEdgeSecret();
+  if (!secret || String(params.secret || '') !== secret) {
+    throw new ApiError('FORBIDDEN', 'Not authorised to record observations.');
+  }
+
+  var id = verifyObservationToken(params.token);
+  if (!id) throw new ApiError('NOT_FOUND', 'Unknown observation token.');
+
+  var obs = getRecordByIdRaw('EmailObservation', id);
+  if (!obs) throw new ApiError('NOT_FOUND', 'Unknown observation.');
+
+  var now = new Date().toISOString();
+  var count = Number(obs.ObservationCount || 0) + 1;
+
+  var sentAt = Date.parse(String(obs.CreatedAt || ''));
+  var secondsSinceSend = isNaN(sentAt) ? null : (Date.now() - sentAt) / 1000;
+
+  var evidence = {
+    ua: params.ua || '', accept: params.accept || '',
+    country: params.country || '', region: params.region || '',
+    referer: params.referer || '',
+    applePrivacyRelay: params.applePrivacyRelay || ''
+  };
+
+  var verdict = classifyObservationFetch(evidence, count, secondsSinceSend);
+
+  // Append-only. A later reclassification must never destroy what was seen.
+  appendRecordRaw('EmailObservationEvent', {
+    ObservationId: id,
+    SequenceNumber: count,
+    ObservedAt: now,
+    SourceClass: verdict.state,
+    Confidence: verdict.confidence,
+    Evidence: JSON.stringify({
+      evidence: evidence,
+      secondsSinceSend: secondsSinceSend,
+      reason: verdict.reason
+    }),
+    CreatedAt: now
+  });
+
+  // The record keeps the STRONGEST state seen, so a later proxy re-fetch
+  // cannot downgrade a genuine render, and a machine fetch cannot upgrade one.
+  var rank = {};
+  rank[OBSERVATION_STATES.SENT] = 0;
+  rank[OBSERVATION_STATES.MACHINE_FETCHED] = 1;
+  rank[OBSERVATION_STATES.PROXY_FETCHED] = 2;
+  rank[OBSERVATION_STATES.RENDER_UNCERTAIN] = 3;
+  rank[OBSERVATION_STATES.LIKELY_RENDERED] = 4;
+  rank[OBSERVATION_STATES.CONFIRMED_ENGAGEMENT] = 5;
+
+  var current = String(obs.State || OBSERVATION_STATES.SENT);
+  var nextState = (rank[verdict.state] || 0) > (rank[current] || 0)
+    ? verdict.state : current;
+
+  updateRecordRaw('EmailObservation', id, {
+    State: nextState,
+    FirstObservedAt: obs.FirstObservedAt || now,
+    LastObservedAt: now,
+    ObservationCount: count,
+    HighestConfidence: Math.max(
+      Number(obs.HighestConfidence || 0), verdict.confidence),
+    UpdatedAt: now
+  });
+
+  // Only a likely render is worth telling a person about, and the classifier
+  // cannot currently produce one — see classifyObservationFetch.
+  if (nextState === OBSERVATION_STATES.LIKELY_RENDERED &&
+      String(obs.NotificationState || 'none') === 'none') {
+    updateRecordRaw('EmailObservation', id, { NotificationState: 'pending' });
+    auditLog({
+      entityId: String(obs.LeadId || ''), entityType: 'Lead',
+      action: 'EMAIL_LIKELY_RENDERED',
+      userId: String(obs.UserId || 'SYSTEM'),
+      details: 'Likely render — experimental signal, not a confirmed open.',
+      metadata: { observationId: id, confidence: verdict.confidence }
+    });
+  }
+
+  var owner = obs.UserId ? getRecordByIdRaw('Users', obs.UserId) : null;
+  return {
+    ok: true,
+    sequence: count,
+    // Serving the sender's own name is the point of the mechanism, not a
+    // side effect: this is the server-resolved text the requirement asked for.
+    lines: owner ? signatureLinesFor({ ID: owner.ID }) : []
+  };
+}
+
+/**
+ * Escape text for insertion into HTML.
+ *
+ * A DisplayName is free text typed into a sheet. "Smith & Sons <Consulting>"
+ * would otherwise break the markup, and anything angle-bracketed would be
+ * swallowed as a tag.
+ */
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Blank means enabled. Only an explicit opt-out counts.
+ *
+ * Sheets hands booleans back inconsistently — a checkbox reads as the boolean
+ * false, a typed cell as the string "FALSE", and String(false) is 'false', so
+ * comparing against 'FALSE' never matches. This has bitten the codebase before.
+ */
+function isFalseFlag(value) {
+  if (value === false) return true;
+  var s = String(value == null ? '' : value).trim().toLowerCase();
+  return s === 'false' || s === 'no' || s === '0';
+}
+
+/**
+ * Append the approved signature to a message the user has written.
+ *
+ * The signature is composed in the SAME FORMAT as the body. A plaintext
+ * message gets plaintext lines and stays plaintext through detectMailFormat();
+ * an HTML message gets minimal inline markup. Without this rule, appending a
+ * signature would silently convert every plain message to HTML — which the
+ * codebase went out of its way to stop doing.
+ *
+ * Never stored on a draft: this runs at send time only, so reopening and
+ * re-saving a draft cannot accumulate signatures.
+ */
+function assembleSignature(actor, content, ctx) {
+  if (!signatureEnabled()) return content;
+  ctx = ctx || {};
+
+  var lines = signatureLinesFor(actor);
+
+  // A per-message edit from the composer.
+  //
+  // The sender can change what is signed on one message — a phone number for
+  // one client, a different sign-off for a warm thread. It replaces the
+  // assembled block for that message only and never touches the stored record,
+  // so tomorrow's mail is back to the approved signature.
+  //
+  // NOTE the trade this makes: a freely editable signature means the text no
+  // longer necessarily matches the authoritative user record, so it is not
+  // evidence of who sent the message. The From header still is — that comes
+  // from formatFromAddress() and cannot be overridden here. Overrides are
+  // audited for the same reason.
+  var override = String(ctx.signatureOverride == null ? '' : ctx.signatureOverride).trim();
+  if (override.length > 2000) override = override.slice(0, 2000);
+
+  if (!lines.length && !override) return content;
+
+  var body = String(content == null ? '' : content);
+  var isHtml = detectMailFormat(body) === 'html';
+  var block;
+
+  if (override) {
+    if (isHtml) {
+      // Escaped, then newlines restored as <br>. The sender is typing text,
+      // not authoring markup, and letting arbitrary HTML through the composer
+      // would make the signature a script-injection surface.
+      block = '<div style="margin-top:16px">' +
+              '<!--TJG_SIG_OBSERVE-->' +
+              '<p style="margin:0">' +
+              escapeHtml(override).replace(/\r?\n/g, '<br>') +
+              '</p></div>';
+    } else {
+      block = '\n\n' + override;
+    }
+    body = body + block;
+    body = signatureObservationAdapter()(body, ctx);
+    return body.replace('<!--TJG_SIG_OBSERVE-->', '');
+  }
+
+  if (isHtml) {
+    var esc = [];
+    for (var i = 0; i < lines.length; i++) esc.push(escapeHtml(lines[i]));
+    // Inline styles only for the signature itself. A <style> block is
+    // discarded by Outlook's renderer, so nothing the reader needs may
+    // depend on one.
+    //
+    // The marker is where an observation adapter may insert its mechanism.
+    // With the default adapter it is simply removed, so the sent message
+    // contains no trace of it.
+    block = '<div style="margin-top:16px">' +
+            '<!--TJG_SIG_OBSERVE-->' +
+            '<p style="margin:0 0 8px 0">Best regards,</p>' +
+            '<p style="margin:0">' + esc.join('<br>') + '</p>' +
+            '</div>';
+    body = body + block;
+  } else {
+    block = '\n\nBest regards,\n\n' + lines.join('\n');
+    body = body + block;
+  }
+
+  body = signatureObservationAdapter()(body, ctx || {});
+
+  // Whatever the adapter did or did not do, the marker never ships.
+  return body.replace('<!--TJG_SIG_OBSERVE-->', '');
+}
+
+/**
+ * What the CRM will append, for the composer to show before sending.
+ *
+ * Assembled by the same function that does the real thing, against an empty
+ * body, so the preview cannot drift from what is actually sent. Mirroring the
+ * rules on the client would have been one round trip cheaper and eventually
+ * wrong.
+ */
+function getSignaturePreview(actor, params) {
+  params = params || {};
+  if (!actor) throw new ApiError('UNAUTHENTICATED', 'Sign in first.');
+
+  var lines = signatureLinesFor(actor);
+  var enabled = signatureEnabled();
+
+  // Whether the composer should offer render observation at all.
+  //
+  // All three have to hold, and the edge secret is part of it: without a
+  // secret the ingestion endpoint refuses everything, so an observation would
+  // be embedded and then never recorded. Offering the choice in that state
+  // would be a control that silently does nothing.
+  var observationAvailable = enabled && observationEnabled() &&
+    String(PropertiesService.getScriptProperties()
+      .getProperty('EMAIL_OBSERVATION_ADAPTER') || 'static') !== 'static' &&
+    !!observationEdgeSecret();
+
+  return {
+    enabled: enabled,
+    observationAvailable: observationAvailable,
+    // Empty when disabled or when the user has opted out, so the composer can
+    // say nothing rather than promise a signature that will not appear.
+    plaintext: (enabled && lines.length) ? assembleSignature(actor, '') : '',
+    html: (enabled && lines.length) ? assembleSignature(actor, '<p></p>') : '',
+    lines: lines
+  };
+}
+
 /**
  * RFC 5322 `"Display Name" <address>`, or the bare address if we have no name.
  *
@@ -1795,6 +2403,43 @@ function formatFromAddress(actor, mailboxAddress) {
 
   var escaped = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return '"' + escaped + '" <' + mailboxAddress + '>';
+}
+
+/**
+ * Clean a Cc/Bcc list the user typed.
+ *
+ * Accepts commas, semicolons or newlines, drops blanks and duplicates, and
+ * REJECTS anything that is not an address rather than passing it to Zoho and
+ * having the whole message bounce because of one typo.
+ *
+ * @return {string} comma-separated addresses, or '' if there were none
+ */
+function normaliseRecipients(value) {
+  var raw = String(value == null ? '' : value);
+  if (!raw.trim()) return '';
+
+  var parts = raw.split(/[,;\n\r]+/);
+  var seen = {};
+  var out = [];
+
+  for (var i = 0; i < parts.length; i++) {
+    var one = bareAddress(parts[i]) || String(parts[i]).trim();
+    if (!one) continue;
+    if (!isEmail(one)) {
+      throw new ApiError('VALIDATION_FAILED',
+        '"' + String(parts[i]).trim() + '" is not a valid email address.');
+    }
+    var key = one.toLowerCase();
+    if (seen[key]) continue;
+    seen[key] = true;
+    out.push(one);
+  }
+
+  if (out.length > 25) {
+    throw new ApiError('VALIDATION_FAILED',
+      'Too many recipients on one message (' + out.length + ').');
+  }
+  return out.join(',');
 }
 
 function sendZohoEmail(actor, payload) {
@@ -1820,6 +2465,38 @@ function sendZohoEmail(actor, payload) {
   // attachment it does not have.
   var attached = uploadAttachments(box, cfg, payload.attachments);
 
+  // The approved organisational signature, composed server-side from the
+  // sender's own record. No-op while EMAIL_SIGNATURE_ENABLED is off, so the
+  // message goes out byte-identical to before.
+  //
+  // Deliberately after the size check above: the cap protects against a large
+  // body the user typed, and a signature is a few dozen bytes the CRM added.
+  // An observation record is opened BEFORE the send, because its token has to
+  // travel inside the body. Nothing is created while observation is off, so
+  // the sheet stays empty until somebody deliberately turns it on.
+  //
+  // Three things must all be true: the signature is on, observation is
+  // configured, and THIS message asked for it. The per-message choice is the
+  // sender's — some mail should go out as ordinary mail with nothing
+  // observing it, and that has to be the easy option rather than a setting
+  // buried somewhere.
+  var wantsObservation = payload.observe === true || payload.observe === 'true';
+  var observation = null;
+  if (signatureEnabled() && observationEnabled() && wantsObservation) {
+    try {
+      observation = createObservation(actor, payload.leadId, to);
+    } catch (e) {
+      // Observation is instrumentation. It must never stop a message going out.
+      Logger.log('Could not open an observation record: ' + e.message);
+    }
+  }
+
+  var signatureOverride = String(payload.signatureOverride || '');
+  content = assembleSignature(actor, content, {
+    token: observation ? observation.token : '',
+    signatureOverride: signatureOverride
+  });
+
   var sendBody = {
     // A bare address makes the recipient's inbox show the local part of the
     // mailbox — "dhiraj.th" — rather than a person. Every mail client renders
@@ -1831,10 +2508,43 @@ function sendZohoEmail(actor, payload) {
     content: content,
     mailFormat: detectMailFormat(content)
   };
-  if (payload.cc) sendBody.ccAddress = String(payload.cc).trim();
+  // Extra recipients for this message only. They are deliberately NOT written
+  // onto the lead: copying a colleague on one reply does not make them the
+  // contact for that company.
+  var cc = normaliseRecipients(payload.cc);
+  var bcc = normaliseRecipients(payload.bcc);
+  if (cc) sendBody.ccAddress = cc;
+  if (bcc) sendBody.bccAddress = bcc;
   if (attached.length) sendBody.attachments = attached;
 
-  var res = zohoFetch(cfg.mailHost + '/api/accounts/' + box.accountId + '/messages', {
+  // Replying to an existing message keeps it in the same thread.
+  //
+  // A "reply" sent as a brand new message starts a separate conversation in
+  // the recipient's client: they lose the history, and the thread the CRM
+  // shows stops matching the thread they see. Zoho threads a reply when it is
+  // addressed to the original message, which needs its folder as well as its
+  // id — the same pair a body fetch needs.
+  var replyTo = String(payload.replyToMessageId || '');
+  var sendUrl = cfg.mailHost + '/api/accounts/' + box.accountId + '/messages';
+
+  if (replyTo) {
+    var original = findEmailLogRow(replyTo);
+    var folderId = String((original && original.FolderId) || payload.replyToFolderId || '');
+    if (folderId) {
+      sendUrl = cfg.mailHost + '/api/accounts/' + box.accountId +
+                '/folders/' + encodeURIComponent(folderId) +
+                '/messages/' + encodeURIComponent(replyTo);
+      sendBody.action = 'reply';
+      // Zoho supplies the quoted original; asking for it keeps the reply
+      // readable in clients that show the conversation inline.
+      sendBody.mode = 'reply';
+    }
+    // No folder means the original predates FolderId being recorded. Falling
+    // back to a normal send is correct: a message that does not thread is far
+    // better than one that fails to send.
+  }
+
+  var res = zohoFetch(sendUrl, {
     method: 'post',
     contentType: 'application/json',
     headers: { Authorization: 'Zoho-oauthtoken ' + box.accessToken },
@@ -1871,6 +2581,17 @@ function sendZohoEmail(actor, payload) {
     Logger.log('Could not record sent mail: ' + e.message);
   }
 
+  // Stitch the identifiers on now that they exist. The token had to be minted
+  // before the send; the Zoho message id only exists after it.
+  if (observation) {
+    try {
+      updateRecordRaw('EmailObservation', observation.id, {
+        MessageId: sentId || '',
+        UpdatedAt: new Date().toISOString()
+      });
+    } catch (e) { /* the mail went out; a loose join is not worth failing on */ }
+  }
+
   // A draft that has now been sent is closed out rather than left dangling.
   if (payload.draftId) {
     try {
@@ -1884,8 +2605,15 @@ function sendZohoEmail(actor, payload) {
     entityId: payload.leadId || to, entityType: 'Lead', action: 'EMAIL_SENT',
     userId: actor.ID,
     contactMode: 'EMAIL',
-    details: 'Email sent to ' + to + ' from ' + box.email + '.',
-    metadata: { subject: subject }
+    details: 'Email sent to ' + to + ' from ' + box.email + '.' +
+             (signatureOverride ? ' Signature edited for this message.' : ''),
+    metadata: {
+      subject: subject,
+      // Recorded because an edited signature no longer necessarily matches the
+      // authoritative user record, so it should be visible that it happened.
+      signatureEdited: !!signatureOverride,
+      observed: !!observation
+    }
   });
 
   return { status: 'success', from: box.email, to: to };

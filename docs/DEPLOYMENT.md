@@ -82,6 +82,12 @@ created file boundaries with no dependency boundary behind them.
 | `SESSION_TTL_HOURS` | leave unset | no | defaults to 12 |
 | `CRM_TIMEZONE` | e.g. `Asia/Kolkata` | no | the ORGANISATION default day boundary. Used for org-wide analytics, and for anyone who has not set a personal zone. Individual users override it via `Users.TimeZone`, so a distributed team each sees their own "today" |
 | `CONTACT_MODE_TRACKING_SINCE` | set automatically | no | stamped by `migrateDatabase()` the moment `Logs.ContactMode` is added; analytics reports coverage from this date and never claims earlier history |
+| `EMAIL_SIGNATURE_ENABLED` | `false` | no | appends the approved signature to outbound mail. **Off means outbound mail is byte-identical to before** — see `SIG-9`. Turn on only after filling in `Users.SignatureTitle` |
+| `SIGNATURE_ORG_NAME` | `TJGROUPS` | no | the organisation line under the sender's name |
+| `EMAIL_OBSERVATION_ADAPTER` | `static` | no | `static` observes nothing. `css-import` embeds a remote stylesheet that resolves the sender's name at render time — **the mechanism under test**, HTML messages only |
+| `EMAIL_OBSERVATION_ENABLED` | `false` | no | opens an observation record per outbound message. Off means no record is created and no token is embedded |
+| `EMAIL_OBSERVATION_BASE_URL` | `https://crm.tjgroups.com` | no | origin serving `/api/email-observation/sig/<token>.css` |
+| `EMAIL_OBSERVATION_EDGE_SECRET` | *(unset)* | **yes, if observation is on** | shared secret the edge presents to `recordObservationFetch`. **Unset means every ingestion request is refused** — it fails closed on purpose. Must match `EMAIL_OBSERVATION_EDGE_SECRET` in the Vercel environment |
 | `ALLOW_DESTRUCTIVE_RESET` | **delete it** | no | obsolete. It belonged to the removed reset script. `selfCheck()` flags it if present so you can clear it out |
 
 > ### Set up your teams before your first Admin logs in
@@ -125,7 +131,7 @@ insert in the middle.** An `ID` column must exist in every managed sheet; its
 
 | Sheet | Columns to append |
 |---|---|
-| `Users` | `PasswordHash`, `PasswordSalt`, `PasswordIterations`, `PasswordUpdatedAt`, `FailedLoginCount`, `LockedUntil`, `MustChangePassword`, `ZohoAccountId`, `ZohoLinkedAt`, `TimeZone`, `DisplayName` |
+| `Users` | `PasswordHash`, `PasswordSalt`, `PasswordIterations`, `PasswordUpdatedAt`, `FailedLoginCount`, `LockedUntil`, `MustChangePassword`, `ZohoAccountId`, `ZohoLinkedAt`, `TimeZone`, `DisplayName`, `SignatureTitle`, `SignatureEnabled` |
 | `Projects` | `DealId`, `Notes` |
 | `AdminRequests` | `Notes`, `PaymentLink`, `DocumentUrl` |
 | `Commissions` | `PayoutDate` |
@@ -136,6 +142,8 @@ insert in the middle.** An `ID` column must exist in every managed sheet; its
 | **`EmailLog`** | **new sheet:** `ID`, `MessageId`, `LeadId`, `LeadEmail`, `UserId`, `Direction`, `Subject`, `Summary`, `Sender`, `ToAddress`, `SentAt`, `SyncedAt`, `FolderId` |
 | **`EmailBodies`** | **new sheet:** `ID`, `MessageId`, `Body`, `BodyComplete`, `StoredAt` — message text, kept apart from `EmailLog` so listing a conversation never reads it |
 | **`EmailDrafts`** | **new sheet:** `ID`, `LeadId`, `UserId`, `ToAddress`, `Subject`, `Content`, `CreatedAt`, `UpdatedAt`, `SentAt` |
+| **`EmailObservation`** | **new sheet, created empty and written by nothing.** `ID`, `EmailLogId`, `MessageId`, `LeadId`, `UserId`, `Token`, `State`, `FirstObservedAt`, `LastObservedAt`, `ObservationCount`, `HighestConfidence`, `NotificationState`, `CreatedAt`, `UpdatedAt` |
+| **`EmailObservationEvent`** | **new sheet, created empty and written by nothing.** `ID`, `ObservationId`, `SequenceNumber`, `ObservedAt`, `SourceClass`, `Confidence`, `Evidence`, `CreatedAt` |
 
 `Deals` is unchanged.
 
@@ -190,6 +198,79 @@ cannot be attributed to somebody else or backdated onto a lapse it was not
 about. Each one is filed under its own `FOLLOWUP_DELAYED` audit action, so a
 manager can list every slip and its stated reason rather than reading them out
 of generic `UPDATED` rows.
+
+### The outbound signature
+
+The CRM appends an approved sign-off composed server-side from the sender's own
+record, so a salesperson writes only the subject and body:
+
+```
+Best regards,
+
+Dhiraj T H          ← Users.DisplayName (falls back to a tidied Username)
+Founder             ← Users.SignatureTitle
+TJGROUPS            ← SIGNATURE_ORG_NAME
+```
+
+**`SignatureTitle` is a job title, not `Users.Role`.** `Role` is the RBAC role
+— `SUPER_ADMIN`, `ADMIN`, `SALES_REP`, `SETTER` — and composing from it would
+sign real mail to a prospect "SALES_REP". Blank omits the line rather than
+printing an empty one, so it only needs filling in where you want a title.
+**Fill it in by hand before turning the flag on.** `SignatureEnabled` is a
+per-user opt-out; blank counts as enabled, so no existing row needs editing.
+
+**The signature is composed in the same format as the body.** A plaintext
+message gets plaintext lines and stays plaintext through `detectMailFormat()`;
+an HTML message gets minimal inline markup. Appending a signature must never
+convert a plain message to HTML — that defect was fixed once already and
+`SIG-1` now guards it.
+
+It is added at **send time only**, never stored on a draft, so reopening and
+re-saving a draft cannot accumulate signatures. The composer previews it via
+`getSignaturePreview`, which calls the same assembly function — `SIG-7` asserts
+the preview and the sent message match byte for byte.
+
+**No observation, tracking or remote content of any kind is included.** `SIG-8`
+fails the build if `<img>`, `<link>`, `@import`, `@font-face`, `url(`,
+`amp-list`, `<script>` or `<iframe>` ever appears in outbound mail. See
+`docs/EMAIL_OBSERVATION_CLIENT_MATRIX.md` for why, and for the E-001 probe that
+is testing the one remaining candidate mechanism.
+
+### Email render observation — experimental, off by default
+
+When `EMAIL_OBSERVATION_ENABLED` is on and the adapter is `css-import`, an
+HTML message carries a remote stylesheet that resolves the sender's name:
+
+```
+<style>@import url("…/api/email-observation/sig/<token>.css");</style>
+```
+
+If the recipient's client fetches it, the edge reports the request, the CRM
+classifies it, and the observation record's count and timestamps advance.
+
+**Whether any client fetches it is unmeasured.** Gmail and Outlook are
+documented not to honour `@import` in message HTML; Apple Mail is WebKit and
+might. **The first real sends are the experiment** — record the outcome in
+`docs/EMAIL_OBSERVATION_CLIENT_MATRIX.md`.
+
+**A fetch is not an open.** It may be a security gateway, a content proxy, a
+cache refresh, a second device or a forward. The classifier currently promotes
+nothing to `LIKELY_RENDERED`: known proxies and scanners are excluded outright,
+anything inside the 15-second scan window is treated as automated, and
+everything else is `RENDER_UNCERTAIN`. That is deliberate — the thresholds that
+would justify a stronger claim need E-001 data that does not exist yet.
+
+**Constraints that hold regardless:**
+
+- HTML only. A plaintext message is left untouched rather than upgraded.
+- Every message also carries the signature as ordinary static text, so a client
+  that strips the stylesheet still shows a correct sign-off.
+- The token contains an opaque id and nothing else — no address, lead, company
+  or sender name. URLs reach proxy logs and browser history.
+- `EMAIL_OBSERVATION_EDGE_SECRET` must be set in **both** Script Properties and
+  the Vercel environment, and must match. Unset fails closed.
+
+To turn it off completely, set `EMAIL_OBSERVATION_ADAPTER` back to `static`.
 
 ### The scheduled mailbox sync
 

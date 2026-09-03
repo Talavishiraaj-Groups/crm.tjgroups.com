@@ -5,7 +5,7 @@ import { ApiError } from '../../api/errors';
 import { decodeHtmlEntities, stripHtmlTags, isHtmlContent } from '../../utils/htmlUtils';
 import { 
   Mail, Search, RefreshCw, ChevronDown, ChevronUp, 
-  Maximize2, Copy, Check, X, ArrowUpRight, ArrowDownLeft, Clock, Eye, FileText, CheckCircle2, Type
+  Maximize2, Copy, Check, X, ArrowUpRight, ArrowDownLeft, Clock, Eye, FileText, CheckCircle2, Type, Reply
 } from 'lucide-react';
 
 /**
@@ -22,6 +22,21 @@ function formatAddress(value?: string): string {
   const wrapped = decoded.match(/^<([^>]+)>$/);
   return wrapped ? wrapped[1] : decoded;
 }
+/**
+ * What the CRM observed happening to one sent message.
+ *
+ * Deliberately not a boolean. A fetch means something rendered the message —
+ * it may equally have been a security gateway, a mail proxy, a cache refresh
+ * or a forward. `state` carries that distinction; the UI must never collapse
+ * it into "opened".
+ */
+export interface MessageObservation {
+  state: string;
+  observationCount: number;
+  firstObservedAt: string;
+  lastObservedAt: string;
+}
+
 interface ZohoEmailViewerProps {
   emails: ZohoEmailItem[];
   /** Needed to authorise fetching a message body. */
@@ -31,6 +46,10 @@ interface ZohoEmailViewerProps {
   crmLogs?: Log[];
   onRefresh: () => void;
   isRefreshing?: boolean;
+  /** Keyed by Zoho message id. Only messages the viewer may see are present. */
+  observations?: Record<string, MessageObservation>;
+  /** Reply into this message's thread rather than starting a new one. */
+  onReply?: (item: ZohoEmailItem) => void;
 }
 
 export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
@@ -40,7 +59,9 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
   leadName,
   crmLogs = [],
   onRefresh,
-  isRefreshing = false
+  isRefreshing = false,
+  observations = {},
+  onReply,
 }) => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [selectedEmail, setSelectedEmail] = useState<ZohoEmailItem | null>(null);
@@ -60,6 +81,11 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
   const loadFullBody = useCallback(async (item: ZohoEmailItem) => {
     const key = item.messageId || item.id;
     if (!key || bodies[key] || loadingBody === key) return;
+    // The archive already carried the complete text, so there is nothing to
+    // fetch. Skipping this is the difference between expanding instantly and
+    // waiting out a round trip that on Apps Script costs about three seconds
+    // no matter how little work it does.
+    if (item.bodyComplete && item.content) return;
     setLoadingBody(key);
     try {
       const res = await api.zoho.getEmailContent(key, { leadId });
@@ -121,6 +147,11 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
     const fetched = bodies[item.messageId || item.id];
     if (fetched && fetched.complete && fetched.text) {
       return { body: decodeHtmlEntities(fetched.text), isFromLog: false };
+    }
+    // The archive supplied the complete text with the list, so it is the whole
+    // message and needs no fetch to confirm it.
+    if (item.bodyComplete && item.content) {
+      return { body: decodeHtmlEntities(item.content), isFromLog: false };
     }
     // An INCOMPLETE result is still better than the list summary if it is
     // longer, but it must not be treated as the whole message.
@@ -394,6 +425,53 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                     )}
                   </div>
 
+                  {/*
+                    What happened to this message after it left.
+
+                    Shown only for mail WE sent, and only when the CRM actually
+                    observed something — an inbound message has nothing to
+                    observe, and silence is not evidence of anything either way.
+                  */}
+                  {item.direction === 'out' && (() => {
+                    const obs = observations[item.messageId || item.id];
+                    if (!obs || !obs.observationCount) return null;
+                    const when = obs.lastObservedAt
+                      ? new Date(obs.lastObservedAt).toLocaleString(undefined,
+                          { dateStyle: 'medium', timeStyle: 'short' })
+                      : '';
+                    // Wording per state. "Likely rendered" is the strongest
+                    // claim the evidence can carry; a proxy or scanner fetch is
+                    // named as such rather than dressed up as engagement.
+                    const label =
+                      obs.state === 'LIKELY_RENDERED' ? 'Likely rendered'
+                      : obs.state === 'CONFIRMED_ENGAGEMENT' ? 'Engaged'
+                      : obs.state === 'PROXY_FETCHED' ? 'Fetched by a mail proxy'
+                      : obs.state === 'MACHINE_FETCHED' ? 'Fetched by a scanner'
+                      : 'Fetched — source unconfirmed';
+                    const strong = obs.state === 'LIKELY_RENDERED' ||
+                                   obs.state === 'CONFIRMED_ENGAGEMENT';
+                    return (
+                      <div className={`px-4 py-2 border-t text-[10px] leading-relaxed ${
+                        strong
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-[#F9F9F9] border-[#DFDFDF] text-[#161616]/50'
+                      }`}>
+                        <span className="font-black uppercase tracking-widest">{label}</span>
+                        <span className="ml-2">
+                          {obs.observationCount === 1
+                            ? '1 observation'
+                            : `${obs.observationCount} observations`}
+                          {when ? ` · last ${when}` : ''}
+                        </span>
+                        {!strong && (
+                          <span className="block mt-0.5 text-[#161616]/35">
+                            A fetch is not proof the recipient read it.
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Card Footer Actions */}
                   <div className="px-4 py-2.5 bg-[#F9F9F9] border-t border-[#DFDFDF] flex items-center justify-between text-xs">
                     <button
@@ -407,16 +485,33 @@ export const ZohoEmailViewer: React.FC<ZohoEmailViewerProps> = ({
                       )}
                     </button>
 
-                    <button
-                      onClick={() => {
-                        setSelectedEmail(item);
-                        setModalTab(hasRichHtml ? 'preview' : 'text');
-                        loadFullBody(item);
-                      }}
-                      className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#161616] hover:bg-[#161616]/90 text-white rounded-[6px] text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shadow-sm"
-                    >
-                      <Maximize2 className="w-3 h-3 text-blue-400" /> FULL VIEW OPTION
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {/*
+                        Reply INTO this thread. Composing a fresh message
+                        instead starts a separate conversation in the
+                        recipient's client, so they lose the history and the
+                        thread the CRM shows stops matching the one they see.
+                      */}
+                      {onReply && (
+                        <button
+                          onClick={() => onReply(item)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 border border-[#DFDFDF] hover:border-[#161616] text-[#161616]/70 hover:text-[#161616] rounded-[6px] text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                        >
+                          <Reply className="w-3 h-3" /> Reply
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          setSelectedEmail(item);
+                          setModalTab(hasRichHtml ? 'preview' : 'text');
+                          loadFullBody(item);
+                        }}
+                        className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#161616] hover:bg-[#161616]/90 text-white rounded-[6px] text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shadow-sm"
+                      >
+                        <Maximize2 className="w-3 h-3 text-blue-400" /> FULL VIEW OPTION
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

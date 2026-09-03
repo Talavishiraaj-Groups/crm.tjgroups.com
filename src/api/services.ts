@@ -390,6 +390,9 @@ function toUser(r: SheetRow): User {
     status: (str(r.Status) || 'Inactive') as User['status'],
     availability: (str(r.Availability) || 'Offline') as User['availability'],
     zohoEmail: str(r.ZohoEmail),
+    // Returned by getUsers all along, but never mapped — so the UI showed
+    // login handles wherever a person's name belonged.
+    displayName: str(r.DisplayName),
     // The backend no longer returns refresh tokens; it returns link state.
     zohoLinked: Boolean(r.ZohoLinked),
     hasPassword: Boolean(r.HasPassword),
@@ -412,12 +415,19 @@ function toDraft(r: SheetRow): EmailDraft {
  */
 function toStoredEmail(r: SheetRow): ZohoEmailItem {
   const summary = str(r.Summary);
+  // The archive now carries the full text for messages the CRM already holds,
+  // so `content` is the real message rather than Zoho's truncated summary and
+  // expanding costs no round trip. Falls back to the summary when the body was
+  // never cached.
+  const body = str(r.Body);
+  const complete = r.BodyComplete === true || str(r.BodyComplete).toUpperCase() === 'TRUE';
   return {
     id: str(r.ID) || str(r.MessageId),
     messageId: str(r.MessageId),
     subject: str(r.Subject) || '(No Subject)',
     summary,
-    content: summary,
+    content: complete && body ? body : summary,
+    bodyComplete: complete && !!body,
     sender: str(r.Sender),
     toAddress: str(r.ToAddress),
     direction: str(r.Direction) === 'in' ? 'in' : 'out',
@@ -930,16 +940,32 @@ export const api = {
     sendEmail: async (
       to: string, subject: string, content: string,
       opts: {
-        leadId?: string; draftId?: string; cc?: string;
+        leadId?: string; draftId?: string; cc?: string; bcc?: string;
+        /** Reply INTO this message's thread instead of starting a new one. */
+        replyToMessageId?: string;
         /** base64 payloads. The server uploads each one before sending. */
         attachments?: { name: string; mimeType: string; data: string }[];
+        /**
+         * The signature as edited in the composer. Applies to this message
+         * only; the sender's stored signature is untouched.
+         */
+        signatureOverride?: string;
+        /**
+         * Ask for render observation on this message. Off is the default and
+         * the ordinary case: most mail should go out with nothing observing
+         * it. Has no effect unless observation is configured server-side.
+         */
+        observe?: boolean;
       } = {}
     ): Promise<void> => {
       await fetchAPI('sendZohoEmail', 'POST', {
         to, subject, content,
         leadId: opts.leadId || '', draftId: opts.draftId || '',
-        cc: opts.cc || '',
+        cc: opts.cc || '', bcc: opts.bcc || '',
+        replyToMessageId: opts.replyToMessageId || '',
         attachments: opts.attachments || [],
+        signatureOverride: opts.signatureOverride || '',
+        observe: opts.observe === true,
       });
     },
 
@@ -966,6 +992,33 @@ export const api = {
      * each message to a lead where one exists. This is what surfaces
      * correspondence with people who are not in the CRM at all.
      */
+    /**
+     * What the CRM will append to this message when it sends.
+     *
+     * Assembled by the server from the same function that does the real thing,
+     * so the preview cannot drift from what is actually sent. Mirroring the
+     * rules here would have saved a round trip and eventually been wrong.
+     */
+    getSignaturePreview: async (): Promise<{
+      enabled: boolean; observationAvailable: boolean;
+      plaintext: string; html: string; lines: string[];
+    }> => {
+      const res = await fetchAPI<{
+        enabled?: boolean; observationAvailable?: boolean;
+        plaintext?: string; html?: string; lines?: string[];
+      }>('getSignaturePreview', 'POST', {});
+      return {
+        enabled: Boolean(res?.enabled),
+        // The server decides whether observation is even possible. Defaulting
+        // to false means an older backend, or one with the feature off, never
+        // shows a control that would do nothing.
+        observationAvailable: Boolean(res?.observationAvailable),
+        plaintext: String(res?.plaintext || ''),
+        html: String(res?.html || ''),
+        lines: Array.isArray(res?.lines) ? res.lines.map(String) : [],
+      };
+    },
+
     syncMailbox: async (limit?: number): Promise<{
       scanned: number; stored: number; matchedToLead: number;
       withoutLead: number; mailbox: string;

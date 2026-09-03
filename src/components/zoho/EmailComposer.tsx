@@ -5,13 +5,22 @@ import { stripHtmlTags } from '../../utils/htmlUtils';
 import { RichTextEditor } from './RichTextEditor';
 import {
   Send, Save, Trash2, FileEdit, Check, AlertTriangle, Loader2, X,
-  Paperclip, File as FileIcon,
+  Paperclip, File as FileIcon, Reply,
 } from 'lucide-react';
 
 interface EmailComposerProps {
   leadId: string;
   leadEmail: string;
   leadName: string;
+  /**
+   * The message being replied to, if any.
+   *
+   * Set by the Reply button in the conversation view. Sending with this
+   * present keeps the message in the SAME thread rather than starting a new
+   * conversation the recipient sees with none of the history.
+   */
+  replyTo?: { messageId: string; subject: string; sender: string } | null;
+  onClearReply?: () => void;
   /** Called after a message actually leaves the mailbox. */
   onSent: () => void;
 }
@@ -62,7 +71,7 @@ const formatBytes = (n: number) =>
  * backend, so saving on each keystroke would be expensive for no benefit.
  */
 export const EmailComposer: React.FC<EmailComposerProps> = ({
-  leadId, leadEmail, leadName, onSent,
+  leadId, leadEmail, leadName, replyTo, onClearReply, onSent,
 }) => {
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -87,6 +96,46 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
    */
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 
+  /**
+   * The sign-off the CRM will add when this sends.
+   *
+   * Fetched from the server rather than composed here, so what is shown is
+   * what is actually appended. Loaded once when the composer mounts: it
+   * depends on who is signed in, not on which message is being written.
+   */
+  const [signature, setSignature] = useState<string[]>([]);
+
+  /**
+   * The signature as edited for THIS message.
+   *
+   * Empty means "use the approved one". Editing here never changes the stored
+   * signature, so the next message starts from the approved text again.
+   */
+  const [signatureEdit, setSignatureEdit] = useState('');
+  const [editingSignature, setEditingSignature] = useState(false);
+
+  /**
+   * Whether to ask for render observation on this message.
+   *
+   * Off by default and deliberately so: ordinary mail should be ordinary, and
+   * choosing to observe should be a decision the sender makes per message.
+   */
+  const [observe, setObserve] = useState(false);
+
+  /**
+   * Whether the server can observe at all.
+   *
+   * The choice is hidden entirely when it cannot. A control that appears to
+   * do something and silently does nothing is worse than no control — and in
+   * production the feature is off by default, so this is the normal state.
+   */
+  const [canObserve, setCanObserve] = useState(false);
+
+  /** Extra recipients for this message only; never written onto the lead. */
+  const [cc, setCc] = useState('');
+  const [bcc, setBcc] = useState('');
+  const [showCopies, setShowCopies] = useState(false);
+
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -104,6 +153,33 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDrafts();
   }, [loadDrafts]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const sig = await api.zoho.getSignaturePreview();
+        // Nothing is shown when the feature is off or the user has opted out,
+        // rather than promising a sign-off that will not appear.
+        if (cancelled) return;
+        if (sig.enabled) setSignature(sig.lines);
+        setCanObserve(sig.observationAvailable);
+      } catch {
+        // The preview is informational. Failing to load it must never stop
+        // someone sending an email.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!replyTo) return;
+    // Prefill the subject the way every mail client does, without stacking
+    // "Re: Re: Re:" on a thread that has been going a while.
+    const base = replyTo.subject.replace(/^(re:\s*)+/i, '').trim();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSubject(base ? `Re: ${base}` : '');
+  }, [replyTo]);
 
   const persist = useCallback(async (nextSubject: string, nextBody: string) => {
     if (!nextSubject.trim() && !stripHtmlTags(nextBody).trim()) return;
@@ -158,6 +234,13 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
     setError('');
     setAttachments([]);
     setSaved({ id: '', subject: '', body: '', at: '' });
+    // A per-message signature edit and an observation choice belong to the
+    // message that was just sent, not to the next one. Carrying either over
+    // would silently apply a decision the sender made about someone else.
+    setSignatureEdit('');
+    setEditingSignature(false);
+    setObserve(false);
+    setCc(''); setBcc(''); setShowCopies(false);
   };
 
   const addFiles = async (files: FileList | null) => {
@@ -214,6 +297,13 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
         // sitting in the list as if it were still unsent.
         draftId: saved.id || undefined,
         attachments: attachments.map(({ name, mimeType, data }) => ({ name, mimeType, data })),
+        // Only sent when actually edited, so an untouched composer keeps using
+        // the approved signature rather than pinning a copy of it.
+        replyToMessageId: replyTo?.messageId,
+        cc: cc.trim() || undefined,
+        bcc: bcc.trim() || undefined,
+        signatureOverride: signatureEdit.trim() ? signatureEdit : undefined,
+        observe,
       });
       startNew();
       loadDrafts();
@@ -311,10 +401,83 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
         </div>
       )}
 
+      {/*
+        Replying keeps the message in the existing conversation. Said plainly,
+        because otherwise there is no way to tell a reply from a new message
+        until the recipient sees it in the wrong place.
+      */}
+      {replyTo && (
+        <div className="mb-3 flex items-start gap-2 px-3 py-2 bg-white/5 border border-white/10 rounded-[6px]">
+          <Reply className="w-3.5 h-3.5 text-white/40 shrink-0 mt-0.5" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-black uppercase tracking-widest text-white/40">
+              Replying in this thread
+            </p>
+            <p className="text-xs text-white/70 truncate">{replyTo.subject}</p>
+          </div>
+          {onClearReply && (
+            <button
+              type="button"
+              onClick={onClearReply}
+              aria-label="Send as a new message instead"
+              className="text-white/30 hover:text-white/70 shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="mb-3 flex items-center gap-2 text-[10px] text-white/30 font-bold uppercase tracking-widest">
         <span>To</span>
         <span className="text-white/70 normal-case tracking-normal font-semibold">{leadEmail}</span>
+        {!showCopies && (
+          <button
+            type="button"
+            onClick={() => setShowCopies(true)}
+            className="ml-auto text-[10px] font-bold uppercase tracking-widest text-white/30 hover:text-white/70"
+          >
+            + Cc / Bcc
+          </button>
+        )}
       </div>
+
+      {/*
+        Extra recipients for THIS message. Deliberately not written onto the
+        lead: copying a colleague on one reply does not make them the contact
+        for that company, and quietly adding them to the record would corrupt
+        who the lead actually is.
+      */}
+      {showCopies && (
+        <div className="mb-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <span className="w-8 shrink-0 text-[10px] text-white/30 font-bold uppercase tracking-widest">Cc</span>
+            <input
+              type="text"
+              value={cc}
+              onChange={(e) => setCc(e.target.value)}
+              disabled={isSending}
+              placeholder="name@company.com, another@company.com"
+              className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-[6px] text-xs focus:outline-none focus:border-white/30 text-white placeholder:text-white/20"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-8 shrink-0 text-[10px] text-white/30 font-bold uppercase tracking-widest">Bcc</span>
+            <input
+              type="text"
+              value={bcc}
+              onChange={(e) => setBcc(e.target.value)}
+              disabled={isSending}
+              placeholder="hidden@company.com"
+              className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-[6px] text-xs focus:outline-none focus:border-white/30 text-white placeholder:text-white/20"
+            />
+          </div>
+          <p className="text-[10px] text-white/25 leading-relaxed pl-10">
+            Separate addresses with commas. These apply to this email only and are
+            not added to the lead.
+          </p>
+        </div>
+      )}
 
       <input
         type="text"
@@ -331,6 +494,130 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
           disabled={isSending}
           placeholder="Write your email body…"
         />
+
+        {/*
+          What the CRM adds when this sends, shown where it will actually
+          appear. Read-only on purpose: it comes from the sender's own record,
+          so editing it here would either be discarded or create a second
+          source of truth for who someone is.
+        */}
+        {signature.length > 0 && (
+          <div className="mt-2 px-4 py-3 bg-[#F9F9F9] border border-dashed border-[#DFDFDF] rounded-[6px]">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[9px] font-black text-[#161616]/30 uppercase tracking-widest">
+                {signatureEdit.trim()
+                  ? 'Signature — edited for this email'
+                  : 'Added automatically when you send'}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!editingSignature && !signatureEdit.trim()) {
+                    // Seed the box with the approved text so editing starts
+                    // from what would actually have been sent.
+                    setSignatureEdit(['Best regards,', '', ...signature].join('\n'));
+                  }
+                  setEditingSignature(!editingSignature);
+                }}
+                className="text-[9px] font-bold uppercase tracking-widest text-[#161616]/40 hover:text-[#161616]"
+              >
+                {editingSignature ? 'Done' : 'Edit'}
+              </button>
+            </div>
+
+            {editingSignature ? (
+              <>
+                <textarea
+                  rows={6}
+                  value={signatureEdit}
+                  onChange={(e) => setSignatureEdit(e.target.value)}
+                  disabled={isSending}
+                  className="w-full bg-white border border-[#DFDFDF] rounded-[4px] px-3 py-2 text-xs leading-relaxed focus:outline-none focus:border-[#161616] resize-none"
+                />
+                <div className="flex items-center justify-between mt-2">
+                  <p className="text-[10px] text-[#161616]/40">
+                    Applies to this email only. Your saved signature is unchanged.
+                  </p>
+                  {signatureEdit.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => { setSignatureEdit(''); setEditingSignature(false); }}
+                      className="text-[9px] font-bold uppercase tracking-widest text-[#161616]/40 hover:text-[#161616]"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : signatureEdit.trim() ? (
+              <p className="text-xs text-[#161616]/60 leading-relaxed whitespace-pre-wrap">
+                {signatureEdit}
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-[#161616]/60 leading-relaxed">Best regards,</p>
+                <p className="text-xs text-[#161616]/60 leading-relaxed mt-2">
+                  {signature.map((line, i) => (
+                    <React.Fragment key={i}>{line}<br /></React.Fragment>
+                  ))}
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
+        {/*
+          How this message goes out. Ordinary is the default and the ordinary
+          case; observation is a deliberate per-message choice.
+
+          The wording says "render observation", not "read receipt" or "open
+          tracking", because a fetch is not proof anyone read anything — it may
+          be a security gateway, a content proxy or a cache. Promising more
+          than that in the UI would be the same lie the state machine exists to
+          avoid.
+        */}
+        {canObserve && (
+        <div className="mt-2 px-4 py-3 bg-white border border-[#DFDFDF] rounded-[6px] flex flex-col gap-2">
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="radio"
+              checked={!observe}
+              onChange={() => setObserve(false)}
+              disabled={isSending}
+              className="mt-0.5 accent-[#161616]"
+            />
+            <span className="min-w-0">
+              <span className="text-xs font-bold text-[#161616]">Send as a regular email</span>
+              <span className="block text-[10px] text-[#161616]/40 leading-relaxed">
+                Nothing observes this message.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="radio"
+              checked={observe}
+              onChange={() => setObserve(true)}
+              disabled={isSending}
+              className="mt-0.5 accent-[#161616]"
+            />
+            <span className="min-w-0">
+              <span className="text-xs font-bold text-[#161616]">
+                Send with render observation
+                <span className="ml-1.5 text-[9px] font-black uppercase tracking-widest text-amber-600">
+                  experimental
+                </span>
+              </span>
+              <span className="block text-[10px] text-[#161616]/40 leading-relaxed">
+                Records when the signature is fetched. A fetch may be a security
+                scanner or a mail proxy rather than the recipient, so it is
+                reported as a likely render — never as a confirmed open.
+              </span>
+            </span>
+          </label>
+        </div>
+        )}
       </div>
 
       {/* Attachments */}

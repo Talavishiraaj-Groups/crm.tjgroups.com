@@ -9,6 +9,16 @@ export interface User {
   availability: 'Available' | 'Busy' | 'Offline';
   zohoEmail?: string;
   /**
+   * The person's real name, as it appears in a recipient's inbox and in the
+   * outbound signature.
+   *
+   * Present in the Users sheet and returned by getUsers, but never mapped into
+   * the client until now — so screens showed login handles where a name
+   * belonged. Blank where nobody has filled it in, so callers fall back to the
+   * username.
+   */
+  displayName?: string;
+  /**
    * Whether this user has connected a Zoho mailbox.
    *
    * The refresh token itself is never sent to the browser — the backend
@@ -159,6 +169,12 @@ export interface ZohoEmailItem {
   timestamp: string;
   /** Zoho's own message id — the key a stored copy is matched on. */
   messageId?: string;
+  /**
+   * True when `content` is the complete message the CRM has archived, rather
+   * than Zoho's truncated summary. Set by the archive read, so expanding a
+   * message it covers needs no further request.
+   */
+  bodyComplete?: boolean;
   /**
    * True when this entry came from the CRM's own EmailLog rather than a live
    * Zoho fetch. Stored entries keep the conversation readable when a token

@@ -41,6 +41,11 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
         // notification people actually need: a client got in touch.
         { key: 'replies', action: 'getLogs', payload: { logAction: 'EMAIL_RECEIVED', since } },
         { key: 'requests', action: 'getAdminRequests' },
+        // Who is responsible for each lead. Rides the existing batch, so it
+        // costs no extra round trip — and without it a Super Admin sees
+        // "Reply from Acme" across the whole organisation with no idea whose
+        // desk it belongs on.
+        { key: 'users', action: 'getUsers' },
       ]);
 
       const leads = got.get<Record<string, unknown>[]>('leads', []).map(api.map.lead);
@@ -53,6 +58,31 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
           .map(l => l.entityId)
       );
 
+      const users = got.get<Record<string, unknown>[]>('users', []).map(api.map.user);
+      const userById = new Map(users.map((u) => [u.id, u]));
+
+      /**
+       * The person answerable for a lead, by name.
+       *
+       * Owner first, then setter, then closer — the owner is who the lead
+       * belongs to, the others are who is working it. Falls back to the
+       * username when no display name has been filled in, and to nothing at
+       * all rather than printing "Unassigned" where a name should be.
+       */
+      const responsibleFor = (lead: { ownerRepId?: string; setterId?: string; closerId?: string }) => {
+        const id = lead.ownerRepId || lead.setterId || lead.closerId;
+        if (!id) return '';
+        const u = userById.get(id);
+        if (!u) return '';
+        return u.displayName || u.username || '';
+      };
+
+      /** "Acme Ltd · Dolapo Busari", or just the lead when nobody is assigned. */
+      const withOwner = (leadName: string, lead: Parameters<typeof responsibleFor>[0]) => {
+        const who = responsibleFor(lead);
+        return who ? `${leadName} · ${who}` : leadName;
+      };
+
       const items: NotificationItem[] = [];
 
       // A reply from a client comes first — it is the only item here that
@@ -64,7 +94,7 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
         if (!lead) continue;
         items.push({
           id: `reply-${entry.id}`,
-          title: `Reply from ${lead.name}`,
+          title: `Reply from ${withOwner(lead.name, lead)}`,
           subtitle: entry.details || 'A new message is waiting.',
           type: 'email_received',
           link: `/leads/${lead.id}`,
@@ -82,7 +112,7 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
         if (Number.isNaN(due) || due > dayAgo) continue;
         items.push({
           id: `stale-${lead.id}`,
-          title: `${lead.name}: follow-up over 24h overdue`,
+          title: `${withOwner(lead.name, lead)}: follow-up over 24h overdue`,
           // Moving the date now requires a reason, so this says what will
           // actually be asked rather than leaving it as a suggestion.
           subtitle: lead.followUpDelayReason
@@ -98,7 +128,7 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
           if (lead.nextFollowUp < todayStr) {
             items.push({
               id: `followup-overdue-${lead.id}`,
-              title: `Overdue Follow-up: ${lead.name}`,
+              title: `Overdue Follow-up: ${withOwner(lead.name, lead)}`,
               subtitle: `Scheduled for ${lead.nextFollowUp}`,
               type: 'overdue',
               link: `/leads/${lead.id}`
@@ -106,7 +136,7 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
           } else if (lead.nextFollowUp === todayStr) {
             items.push({
               id: `followup-today-${lead.id}`,
-              title: `Follow-up Due Today: ${lead.name}`,
+              title: `Follow-up Due Today: ${withOwner(lead.name, lead)}`,
               subtitle: `Scheduled for today`,
               type: 'today',
               link: `/leads/${lead.id}`
@@ -131,7 +161,14 @@ export const TopBar: React.FC<{ title: string }> = ({ title }) => {
           items.push({
             id: `req-${req.id}`,
             title: `Pending ${req.type.toUpperCase()} Request`,
-            subtitle: `Requested by team member`,
+            // "Requested by team member" told an approver nothing they could
+            // act on. The whole point of the queue is knowing whose request
+            // is waiting.
+            subtitle: (() => {
+              const u = userById.get(req.requestedBy);
+              const who = u ? (u.displayName || u.username) : '';
+              return who ? `Requested by ${who}` : 'Requested by a team member';
+            })(),
             type: 'request',
             link: '/admin'
           });

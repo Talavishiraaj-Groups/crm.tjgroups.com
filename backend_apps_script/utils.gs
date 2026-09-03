@@ -223,6 +223,12 @@ var OWNER_ONLY = ['SUPER_ADMIN'];
 var ACTION_POLICY = {
   /* --- session --- */
   'login':            { public: true },
+  // Reachable without a session because the caller is the observation edge,
+  // relaying a request from a mail client that has no CRM login and never
+  // will. It is NOT unauthenticated: it demands a shared secret, and refuses
+  // every request when that secret has not been configured. It reads no lead
+  // data and returns only the sender's own signature lines.
+  'recordObservationFetch': { public: true },
   'logout':           { roles: ALL_ROLES },
   'getSession':       { roles: ALL_ROLES },
   'changePassword':   { roles: ALL_ROLES },
@@ -318,6 +324,11 @@ var ACTION_POLICY = {
   'getStoredEmails':  { roles: ALL_ROLES },
   // Full body of one message, fetched only when someone opens it.
   'getEmailContent':  { roles: ALL_ROLES },
+  // Read-only, and only ever about the CALLER's own signature.
+  'getSignaturePreview': { roles: ALL_ROLES },
+  // Scoped inside the handler by mailVisibleUserIds: your own messages,
+  // your team's if you are an ADMIN, everyone's for a SUPER_ADMIN.
+  'getEmailObservations': { roles: ALL_ROLES },
   'saveEmailDraft':   { roles: ALL_ROLES },
   'getEmailDrafts':   { roles: ALL_ROLES },
   'deleteEmailDraft': { roles: ALL_ROLES },
@@ -647,11 +658,22 @@ function validateLead(payload, opts) {
       payload.Linkedin = '';
     } else {
       var li = String(payload.Linkedin).trim();
-      if (!/^https?:\/\//i.test(li)) {
-        li = 'https://' + li;
-        payload.Linkedin = li;
-      }
-      if (!isHttpUrl(payload.Linkedin)) {
+      var scheme = (li.match(/^([a-z][a-z0-9+.\-]*):/i) || [])[1];
+
+      // Typing a bare domain — "linkedin.com/in/someone" — is the convenience
+      // this normalisation exists for, and that still works.
+      //
+      // But prefixing anything WITHOUT checking for an existing scheme turned
+      // "javascript:alert(1)" into "https://javascript:alert(1)", which
+      // isHttpUrl then accepted. Every value became valid, so the check was
+      // validating nothing. A value that already names a scheme must name
+      // http or https.
+      if (!scheme) li = 'https://' + li;
+      payload.Linkedin = li;
+
+      if (scheme && !/^https?$/i.test(scheme)) {
+        addError(r, 'Linkedin', 'LinkedIn must be an http(s) URL.');
+      } else if (!isHttpUrl(li)) {
         addError(r, 'Linkedin', 'LinkedIn must be an http(s) URL.');
       }
     }

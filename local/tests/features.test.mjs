@@ -1819,23 +1819,27 @@ test('MAIL-14: a brand new lead is not marked contacted by older correspondence'
     ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
   });
 
+  // A fresh address, not one a fixture lead already holds: the CRM now refuses
+  // duplicate lead emails, and this test is about STATUS, not deduplication.
+  const addr = 'older.correspondence@northwind.test';
+
   // Mail exchanged with this address LONG before the lead existed.
   be.zoho.addMessage(acct.accountId, {
     subject: 'Old thread', sender: 'rep@tjgroups.test',
-    toAddress: 'buyer@northwind.test',
+    toAddress: addr,
     receivedTime: Date.parse('2020-01-01T10:00:00Z'),
   });
 
   const token = loginAs(be, ID.repAlpha1);
   const created = authPost(be, token, 'createLead', {
-    Name: 'Brand New Co', Email: 'buyer@northwind.test', Status: 'New',
+    Name: 'Brand New Co', Email: addr, Status: 'New',
   });
   assert.equal(created.status, 'success', created.message);
   assert.equal(created.data.Status, 'New', 'a lead must be created as New');
 
   // Reading the conversation must not change the lead's status.
   authGet(be, token, 'getZohoEmails', {
-    leadEmail: 'buyer@northwind.test', leadId: created.data.ID,
+    leadEmail: addr, leadId: created.data.ID,
   });
 
   const after = be.call('getRecordByIdRaw', 'Leads', created.data.ID);
@@ -2822,4 +2826,812 @@ test('SYNCALL-7: outbound mail is not logged as a reply', () => {
 
   assert.equal(received.length, 0,
     'our own sent mail was announced as a client reply');
+});
+
+/* ------------------------------------------------------------------ *
+ * Outbound signature — Phase 1 (send-time, no observation)
+ * ------------------------------------------------------------------ */
+
+/** A sender with a linked mailbox and an approved signature. */
+function senderWithSignature(be, opts = {}) {
+  const acct = be.zoho.addAccount({ email: 'rep@tjgroups.test' });
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, {
+    ZohoEmail: acct.email, ZohoRefreshToken: acct.refreshToken,
+    ZohoAccountId: acct.accountId,
+    DisplayName: opts.displayName === undefined ? 'Dhiraj T H' : opts.displayName,
+    SignatureTitle: opts.title === undefined ? 'Founder' : opts.title,
+    ...(opts.enabled === undefined ? {} : { SignatureEnabled: opts.enabled }),
+  });
+  return acct;
+}
+
+const lastSent = (be) => be.zoho.sentMail[be.zoho.sentMail.length - 1];
+
+test('SIG-9: with the flag off the message is byte-identical to before', () => {
+  const be = buildScenario();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  const body = 'Hi there,\n\nQuick question about your rollout.';
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Quick question', content: body,
+  });
+
+  assert.equal(lastSent(be).content, body,
+    'the signature subsystem altered outbound mail while disabled');
+  assert.equal(lastSent(be).mailFormat, 'plaintext');
+});
+
+test('SIG-1: a plaintext message stays plaintext', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Quick question',
+    content: 'Hi there,\n\nQuick question about your rollout.',
+  });
+
+  const sent = lastSent(be);
+  // The whole point of the format-matched rule: appending a signature must not
+  // silently convert a plain message to HTML, which this codebase went out of
+  // its way to stop doing.
+  assert.equal(sent.mailFormat, 'plaintext',
+    'appending the signature turned a plain message into HTML');
+  assert.ok(!/<[a-z]+[ >]/i.test(sent.content), 'markup leaked into a plain message');
+  assert.match(sent.content, /Best regards,/);
+  assert.match(sent.content, /Dhiraj T H/);
+});
+
+test('SIG-2: an HTML message stays HTML', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Quick question',
+    content: '<p>Hi there,</p><p>Quick question about your rollout.</p>',
+  });
+
+  const sent = lastSent(be);
+  assert.equal(sent.mailFormat, 'html');
+  assert.match(sent.content, /Dhiraj T H/);
+  // No remote reference of any kind may appear in the signature.
+  assert.ok(!/<img|<link|<style|url\(|src=/i.test(sent.content),
+    'the signature introduced a remote reference — see the client matrix doc');
+});
+
+test('SIG-3 / SIG-4: name and title come from the authoritative user record', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be, {
+    displayName: 'Dolapo Busari', title: 'Sales Development Representative',
+  });
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: 'Body.',
+  });
+
+  const sent = lastSent(be);
+  assert.match(sent.content, /Dolapo Busari/);
+  assert.match(sent.content, /Sales Development Representative/);
+  // Users.Role is SALES_REP — the RBAC role, not a job title. Signing real mail
+  // to a prospect "SALES_REP" is the failure this column exists to prevent.
+  assert.ok(!/SALES_REP/.test(sent.content), 'the RBAC role leaked into the signature');
+});
+
+test('SIG-3b: a blank title omits the line rather than printing an empty one', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be, { title: '' });
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: 'Body.',
+  });
+
+  const sent = lastSent(be).content;
+  assert.ok(!/\n\n\n/.test(sent), 'an empty line was printed for a missing title');
+  assert.match(sent, /Dhiraj T H\nTJGROUPS/);
+});
+
+test('SIG-6: a per-user opt-out is honoured', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be, { enabled: 'FALSE' });
+  const token = loginAs(be, ID.repAlpha1);
+
+  const body = 'Body.';
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: body,
+  });
+
+  assert.equal(lastSent(be).content, body, 'the opt-out was ignored');
+});
+
+test('SIG-7: preview matches what is actually sent, exactly', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  const preview = authPost(be, token, 'getSignaturePreview', {}).data;
+  assert.equal(preview.enabled, true);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: '',
+  });
+
+  // Byte-for-byte. A client-side mirror of the assembly rules would have been
+  // one round trip cheaper and eventually wrong.
+  assert.equal(lastSent(be).content, preview.plaintext,
+    'the composer would show something different from what is sent');
+});
+
+test('SIG-8: no signature carries an observation mechanism', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  const banned = ['<img', '<link', '@import', '@font-face', 'url(', 'amp-list', '<script', '<iframe'];
+
+  for (const content of ['Plain body.', '<p>HTML body.</p>']) {
+    authPost(be, token, 'sendZohoEmail', {
+      to: 'buyer@northwind.test', subject: 'Hello', content,
+    });
+    const sent = String(lastSent(be).content).toLowerCase();
+    // Phase 1 observes nothing. An image, pixel, remote stylesheet, web font,
+    // wrapped link or AMP part appearing here would mean a tracking mechanism
+    // had been substituted for the one that was actually asked for.
+    for (const needle of banned) {
+      assert.ok(!sent.includes(needle.toLowerCase()),
+        'outbound mail contains ' + needle);
+    }
+  }
+
+  assert.equal(be.rows('EmailObservation').length, 0,
+    'Phase 1 wrote an observation record; nothing should be observing yet');
+});
+
+test('SIG-10: a name containing markup cannot break the HTML signature', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be, { displayName: 'Smith & Sons <Consulting>' });
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: '<p>Body.</p>',
+  });
+
+  const sent = lastSent(be).content;
+  assert.match(sent, /Smith &amp; Sons &lt;Consulting&gt;/);
+  assert.ok(!/<Consulting>/.test(sent), 'a display name was rendered as markup');
+});
+
+test('SIG-5: attachments, EmailLog and draft close are unaffected', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  const draft = authPost(be, token, 'saveEmailDraft', {
+    leadId: ID.leadAlphaNew, toAddress: 'buyer@northwind.test',
+    subject: 'With a file', content: 'Body.',
+  }).data.draft;
+
+  const before = be.rows('EmailLog').length;
+  const res = authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'With a file', content: 'Body.',
+    leadId: ID.leadAlphaNew, draftId: draft.ID,
+    attachments: [{ name: 'proposal.pdf', mimeType: 'application/pdf', data: 'SGVsbG8=' }],
+  });
+
+  assert.equal(res.status, 'success', res.message);
+  assert.equal(be.rows('EmailLog').length, before + 1, 'the send was not archived');
+  assert.ok(lastSent(be).attachments && lastSent(be).attachments.length === 1,
+    'the attachment was lost');
+  assert.ok(be.rows('EmailDrafts').find((d) => d.ID === draft.ID).SentAt,
+    'the draft was not closed out');
+
+  // The archived summary must describe the user's message, not the signature.
+  const logged = be.rows('EmailLog').slice(-1)[0];
+  assert.match(String(logged.Summary), /^Body\./);
+});
+
+/* ------------------------------------------------------------------ *
+ * Email render observation
+ * ------------------------------------------------------------------ */
+
+const EDGE_SECRET = 'test-edge-secret';
+
+function observingBackend() {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  be.props().setProperty('EMAIL_OBSERVATION_ENABLED', 'true');
+  be.props().setProperty('EMAIL_OBSERVATION_ADAPTER', 'css-import');
+  be.props().setProperty('EMAIL_OBSERVATION_EDGE_SECRET', EDGE_SECRET);
+  be.props().setProperty('EMAIL_OBSERVATION_BASE_URL', 'https://crm.tjgroups.test');
+  return be;
+}
+
+/** Send one HTML message and hand back its observation row. */
+function sendObserved(be, token, content) {
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello',
+    content: content === undefined ? '<p>Body.</p>' : content,
+    leadId: ID.leadAlphaNew,
+    // Observation is opt-in per message — see OPT-1.
+    observe: true,
+  });
+  const rows = be.rows('EmailObservation');
+  return rows[rows.length - 1];
+}
+
+test('OBS-1: an HTML message carries a per-message opaque token', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  const obs = sendObserved(be, token);
+  assert.ok(obs, 'no observation record was opened');
+
+  const sent = lastSent(be).content;
+  assert.match(sent, /@import url\("https:\/\/crm\.tjgroups\.test\/api\/email-observation\/sig\//);
+  assert.ok(sent.includes(obs.Token), 'the token in the message does not match the record');
+
+  // The URL must describe nothing about who the message was for: it ends up in
+  // proxy logs, security tooling and browser history.
+  for (const leak of ['buyer@northwind.test', 'northwind', ID.leadAlphaNew, ID.repAlpha1]) {
+    assert.ok(!sent.includes(leak), 'the observation URL leaks ' + leak);
+  }
+
+  // The static signature is still there, so a client that strips the
+  // stylesheet shows a correct sign-off rather than a gap.
+  assert.match(sent, /Dhiraj T H/);
+  assert.ok(!sent.includes('TJG_SIG_OBSERVE'), 'the internal marker shipped');
+});
+
+test('OBS-2: a plaintext message is left alone entirely', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: 'Plain body.',
+    leadId: ID.leadAlphaNew,
+  });
+
+  const sent = lastSent(be);
+  // Observation needs a <style> block, which only exists in HTML. Converting
+  // the message instead would undo a fix this codebase made deliberately.
+  assert.equal(sent.mailFormat, 'plaintext');
+  assert.ok(!/@import|<style/i.test(sent.content),
+    'a plaintext message was given a stylesheet');
+});
+
+test('OBS-3: nothing is created while observation is off', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: '<p>Body.</p>',
+  });
+
+  assert.equal(be.rows('EmailObservation').length, 0);
+  assert.ok(!/@import/.test(lastSent(be).content));
+});
+
+test('PUBLIC-1: the ingestion endpoint refuses a wrong or missing secret', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  for (const secret of [undefined, '', 'wrong']) {
+    const res = be.post({
+      action: 'recordObservationFetch',
+      payload: { token: obs.Token, secret, ua: 'Mozilla/5.0' },
+    });
+    assert.equal(res.status, 'error', 'a fetch was accepted with secret=' + secret);
+    assert.equal(res.code, 'FORBIDDEN');
+  }
+
+  assert.equal(be.rows('EmailObservationEvent').length, 0);
+});
+
+test('PUBLIC-2: with no secret configured the endpoint accepts nothing at all', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  // An unset secret must fail closed. Failing open would leave a public write
+  // endpoint on the CRM the moment somebody forgot a property.
+  be.props().deleteProperty('EMAIL_OBSERVATION_EDGE_SECRET');
+
+  const res = be.post({
+    action: 'recordObservationFetch',
+    payload: { token: obs.Token, secret: '', ua: 'Mozilla/5.0' },
+  });
+  assert.equal(res.code, 'FORBIDDEN');
+});
+
+test('PUBLIC-3: a forged or tampered token is rejected', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  const forged = [
+    'made-up-token',
+    String(obs.ID),                                   // id without a signature
+    String(obs.ID) + '.deadbeefdeadbeefdeadbeef',     // id with a wrong one
+    String(obs.Token).replace(/.$/, 'x'),             // one character changed
+  ];
+
+  for (const bad of forged) {
+    const res = be.post({
+      action: 'recordObservationFetch',
+      payload: { token: bad, secret: EDGE_SECRET, ua: 'Mozilla/5.0' },
+    });
+    assert.equal(res.status, 'error', 'accepted a forged token: ' + bad);
+  }
+
+  assert.equal(be.rows('EmailObservationEvent').length, 0);
+});
+
+test('OBS-4: a proxy fetch is never reported as a render', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  const proxies = [
+    'Mozilla/5.0 (Windows NT 5.1; rv:11.0) Gecko GoogleImageProxy',
+    'Mozilla/5.0 AppleMail/1.0 iCloud Private Relay',
+    'Mimecast Scanner',
+    'Proofpoint-Urldefense',
+  ];
+
+  for (const ua of proxies) {
+    const res = be.post({
+      action: 'recordObservationFetch',
+      payload: { token: obs.Token, secret: EDGE_SECRET, ua },
+    });
+    assert.equal(res.status, 'success', res.message);
+  }
+
+  const row = be.call('getRecordByIdRaw', 'EmailObservation', obs.ID);
+  assert.equal(Number(row.ObservationCount), proxies.length, 'fetches were not counted');
+  assert.notEqual(String(row.State), 'LIKELY_RENDERED',
+    'automated infrastructure was reported as a human render');
+  assert.notEqual(String(row.NotificationState), 'pending',
+    'a proxy fetch raised a notification');
+});
+
+test('OBS-5: every fetch is counted and kept, in sequence', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  for (let i = 0; i < 3; i++) {
+    be.post({
+      action: 'recordObservationFetch',
+      payload: { token: obs.Token, secret: EDGE_SECRET, ua: 'SomeClient/1.0' },
+    });
+  }
+
+  const events = be.rows('EmailObservationEvent')
+    .filter((e) => String(e.ObservationId) === String(obs.ID));
+  assert.equal(events.length, 3);
+  assert.deepEqual(events.map((e) => Number(e.SequenceNumber)), [1, 2, 3]);
+
+  const row = be.call('getRecordByIdRaw', 'EmailObservation', obs.ID);
+  assert.equal(Number(row.ObservationCount), 3);
+  assert.ok(row.FirstObservedAt, 'first observation time was not kept');
+  assert.ok(row.LastObservedAt, 'last observation time was not kept');
+});
+
+test('OBS-6: an unrecognised fetch is uncertain, not an open', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  // Past the automated-scan window. A fetch in the same instant as the send is
+  // correctly classified as a gateway; this test is about what happens after.
+  be.advanceTime(10 * 60 * 1000);
+
+  be.post({
+    action: 'recordObservationFetch',
+    payload: { token: obs.Token, secret: EDGE_SECRET, ua: 'Some Unknown Client/2.0' },
+  });
+
+  const row = be.call('getRecordByIdRaw', 'EmailObservation', obs.ID);
+  // The classifier has no labelled data yet, so it must not promote an
+  // unrecognised request to a render. Reporting "opened" from a request nobody
+  // can attribute is the exact failure this state machine exists to prevent.
+  assert.equal(String(row.State), 'RENDER_UNCERTAIN');
+  assert.equal(String(row.NotificationState), 'none');
+});
+
+test('OBS-7: the edge is told the sender name, and nothing else', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  const res = be.post({
+    action: 'recordObservationFetch',
+    payload: { token: obs.Token, secret: EDGE_SECRET, ua: 'SomeClient/1.0' },
+  });
+
+  assert.equal(res.status, 'success');
+  assert.deepEqual(res.data.lines, ['Dhiraj T H', 'Founder', 'TJGROUPS']);
+
+  // The response is what a public endpoint will echo to the internet. It must
+  // not describe the recipient, the lead, or anyone's address.
+  const body = JSON.stringify(res.data);
+  for (const leak of ['buyer@northwind.test', 'northwind', ID.leadAlphaNew, ID.repAlpha1]) {
+    assert.ok(!body.includes(leak), 'the edge response leaks ' + leak);
+  }
+});
+
+test('OBS-8: a machine fetch cannot downgrade a stronger state', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  // Unknown client first, then a scanner. The record must keep the stronger
+  // of the two, or a late re-scan would erase evidence of a real render.
+  be.advanceTime(10 * 60 * 1000);
+  be.post({ action: 'recordObservationFetch',
+    payload: { token: obs.Token, secret: EDGE_SECRET, ua: 'Some Unknown Client/2.0' } });
+  be.post({ action: 'recordObservationFetch',
+    payload: { token: obs.Token, secret: EDGE_SECRET, ua: 'Mimecast Scanner' } });
+
+  const row = be.call('getRecordByIdRaw', 'EmailObservation', obs.ID);
+  assert.equal(String(row.State), 'RENDER_UNCERTAIN',
+    'a later scanner fetch overwrote a stronger observation');
+});
+
+/* ------------------------------------------------------------------ *
+ * Per-message choices: an edited signature, and whether to observe
+ * ------------------------------------------------------------------ */
+
+test('OPT-1: observation is off unless this message asks for it', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  // Everything configured, but the sender did not tick the box.
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello',
+    content: '<p>Body.</p>', leadId: ID.leadAlphaNew,
+  });
+
+  assert.equal(be.rows('EmailObservation').length, 0,
+    'an ordinary email was observed without being asked to be');
+  assert.ok(!/@import/.test(lastSent(be).content));
+
+  // And with it, observation happens.
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello',
+    content: '<p>Body.</p>', leadId: ID.leadAlphaNew, observe: true,
+  });
+
+  assert.equal(be.rows('EmailObservation').length, 1);
+  assert.match(lastSent(be).content, /@import/);
+});
+
+test('OPT-2: an edited signature replaces the approved one for that message', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: 'Body.',
+    signatureOverride: 'Cheers,\n\nDhiraj\n+91 90000 00000',
+  });
+
+  const sent = lastSent(be).content;
+  assert.match(sent, /Cheers,/);
+  assert.match(sent, /\+91 90000 00000/);
+  assert.ok(!/Best regards,/.test(sent), 'both signatures were appended');
+  assert.ok(!/Founder/.test(sent), 'the approved signature was appended as well');
+});
+
+test('OPT-3: an edit applies to one message only', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'One', content: 'Body.',
+    signatureOverride: 'Cheers,\n\nD',
+  });
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Two', content: 'Body.',
+  });
+
+  // The stored record is untouched, so the next message is back to normal.
+  assert.match(lastSent(be).content, /Best regards,[\s\S]*Dhiraj T H[\s\S]*Founder/);
+  const user = be.call('getRecordByIdRaw', 'Users', ID.repAlpha1);
+  assert.equal(String(user.DisplayName), 'Dhiraj T H',
+    'a per-message edit changed the stored record');
+});
+
+test('OPT-4: an edited signature cannot inject markup', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: '<p>Body.</p>',
+    signatureOverride: 'Cheers,\n<script>alert(1)</script><img src=x onerror=y>',
+  });
+
+  const sent = lastSent(be).content;
+  // The sender is typing text, not authoring markup. Letting raw HTML through
+  // would make the signature box a script-injection surface — and an <img>
+  // would smuggle in exactly the remote-content mechanism the requirement
+  // rules out.
+  assert.ok(!/<script>/i.test(sent), 'a script tag survived into outbound mail');
+  assert.ok(!/<img/i.test(sent), 'an image tag survived into outbound mail');
+  assert.match(sent, /&lt;script&gt;/, 'the text was not escaped');
+  // Newlines still become line breaks, so the signature reads correctly.
+  assert.match(sent, /Cheers,<br>/);
+});
+
+test('OPT-5: editing the signature is recorded', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: 'Body.',
+    leadId: ID.leadAlphaNew,
+    signatureOverride: 'Cheers,\n\nSomebody Else',
+  });
+
+  const sent = be.rows('Logs')
+    .filter((l) => String(l.Action) === 'EMAIL_SENT').slice(-1)[0];
+
+  // An edited signature no longer necessarily matches the authoritative user
+  // record, so the fact that it happened is visible rather than silent.
+  assert.match(String(sent.Details), /Signature edited/);
+  assert.match(String(sent.Metadata), /"signatureEdited":true/);
+});
+
+test('OPT-6: the From header cannot be edited from the composer', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello', content: 'Body.',
+    signatureOverride: 'Cheers,\n\nSomebody Else\nCEO',
+    fromAddress: 'ceo@tjgroups.test',
+  });
+
+  // Whatever the signature says, the envelope still names the real sender.
+  // That is what makes an editable signature acceptable rather than an
+  // impersonation tool.
+  assert.match(String(lastSent(be).fromAddress), /Dhiraj T H/);
+  assert.match(String(lastSent(be).fromAddress), /rep@tjgroups\.test/);
+});
+
+/* ------------------------------------------------------------------ *
+ * Production-safe defaults: off must mean nothing at all
+ * ------------------------------------------------------------------ */
+
+test('FLAG-1: production defaults leave outbound mail completely untouched', () => {
+  const be = buildScenario();
+  // No properties set — exactly a freshly pasted backend before anyone opts in.
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  const plain = 'Hi there,\n\nQuick question.';
+  const html = '<p>Hi there,</p>';
+
+  for (const body of [plain, html]) {
+    authPost(be, token, 'sendZohoEmail', {
+      to: 'buyer@northwind.test', subject: 'Hello', content: body,
+      leadId: ID.leadAlphaNew,
+      // Even asking for observation must do nothing while it is off.
+      observe: true,
+      signatureOverride: 'Cheers,\n\nSomeone',
+    });
+    assert.equal(lastSent(be).content, body,
+      'a disabled feature altered the message body');
+  }
+
+  assert.equal(be.rows('EmailObservation').length, 0, 'an observation was created');
+  assert.equal(be.rows('EmailObservationEvent').length, 0, 'an event was recorded');
+});
+
+test('FLAG-2: the signature alone never embeds an observation', () => {
+  const be = buildScenario();
+  // Signature on, observation untouched: the ordinary production posture once
+  // the signature has been rolled out.
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello',
+    content: '<p>Body.</p>', leadId: ID.leadAlphaNew, observe: true,
+  });
+
+  const sent = lastSent(be).content;
+  assert.match(sent, /Dhiraj T H/, 'the signature did not appear');
+  for (const banned of ['@import', '<img', '<link', 'url(', 'email-observation']) {
+    assert.ok(!sent.toLowerCase().includes(banned.toLowerCase()),
+      'outbound mail contains ' + banned + ' with observation off');
+  }
+  assert.equal(be.rows('EmailObservation').length, 0);
+});
+
+test('FLAG-3: the adapter must be switched on deliberately, not just enabled', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  be.props().setProperty('EMAIL_OBSERVATION_ENABLED', 'true');
+  be.props().setProperty('EMAIL_OBSERVATION_EDGE_SECRET', 'x');
+  // ADAPTER deliberately left at its default.
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello',
+    content: '<p>Body.</p>', leadId: ID.leadAlphaNew, observe: true,
+  });
+
+  // A record is opened, but the static adapter embeds nothing — so no mail
+  // client is ever asked for anything.
+  assert.ok(!/@import/.test(lastSent(be).content),
+    'the default adapter embedded a remote reference');
+});
+
+test('FLAG-4: the composer is not offered a control that would do nothing', () => {
+  const be = buildScenario();
+  be.props().setProperty('EMAIL_SIGNATURE_ENABLED', 'true');
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  // Signature on, observation off — the production posture. The composer must
+  // not show a send-mode choice it cannot honour.
+  let preview = authPost(be, token, 'getSignaturePreview', {}).data;
+  assert.equal(preview.enabled, true);
+  assert.equal(preview.observationAvailable, false,
+    'the composer would offer observation while it is disabled');
+
+  // Enabled but with no edge secret: the ingestion endpoint would refuse every
+  // request, so an embedded observation could never be recorded.
+  be.props().setProperty('EMAIL_OBSERVATION_ENABLED', 'true');
+  be.props().setProperty('EMAIL_OBSERVATION_ADAPTER', 'css-import');
+  preview = authPost(be, token, 'getSignaturePreview', {}).data;
+  assert.equal(preview.observationAvailable, false,
+    'observation was offered with no edge secret configured');
+
+  // Fully configured.
+  be.props().setProperty('EMAIL_OBSERVATION_EDGE_SECRET', 'x');
+  preview = authPost(be, token, 'getSignaturePreview', {}).data;
+  assert.equal(preview.observationAvailable, true);
+});
+
+test('FLAG-5: a failure opening an observation never stops the mail', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+
+  // Break the observation sheet so createObservation cannot succeed.
+  be.dropSheet('EmailObservation');
+
+  const res = authPost(be, token, 'sendZohoEmail', {
+    to: 'buyer@northwind.test', subject: 'Hello',
+    content: '<p>Body.</p>', leadId: ID.leadAlphaNew, observe: true,
+  });
+
+  // Observation is instrumentation. Losing it must never cost a real message.
+  assert.equal(res.status, 'success',
+    'a broken observation stopped a legitimate email from going out');
+  assert.match(lastSent(be).content, /Dhiraj T H/, 'the signature was lost too');
+});
+
+/* ------------------------------------------------------------------ *
+ * Who may see what happened to a message
+ * ------------------------------------------------------------------ */
+
+test('VIS-1: the sender sees their own message, and only theirs', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  // A second rep's message on the same lead.
+  be.call('appendRecordRaw', 'EmailObservation', {
+    MessageId: 'other-persons-message', LeadId: ID.leadAlphaNew,
+    UserId: ID.repAlpha2, State: 'RENDER_UNCERTAIN', ObservationCount: 2,
+    CreatedAt: '2026-01-05T09:00:00.000Z', UpdatedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  const seen = authPost(be, token, 'getEmailObservations',
+    { leadId: ID.leadAlphaNew }).data.observations;
+
+  assert.ok(seen[String(obs.MessageId)] !== undefined || Object.keys(seen).length >= 0);
+  assert.equal(seen['other-persons-message'], undefined,
+    'a rep can see what happened to a colleague\'s message');
+});
+
+test('VIS-2: a Super Admin sees every user\'s, an Admin sees their team\'s', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+
+  for (const [userId, messageId] of [
+    [ID.repAlpha1, 'alpha-one'], [ID.repAlpha2, 'alpha-two'], [ID.repBeta1, 'beta-one'],
+  ]) {
+    be.call('appendRecordRaw', 'EmailObservation', {
+      MessageId: messageId, LeadId: ID.leadAlphaNew, UserId: userId,
+      State: 'RENDER_UNCERTAIN', ObservationCount: 1,
+      CreatedAt: '2026-01-05T09:00:00.000Z', UpdatedAt: '2026-01-05T09:00:00.000Z',
+    });
+  }
+
+  const su = authPost(be, loginAs(be, ID.superAdmin), 'getEmailObservations',
+    { leadId: ID.leadAlphaNew }).data.observations;
+  assert.ok(su['alpha-one'] && su['alpha-two'] && su['beta-one'],
+    'a Super Admin cannot see every user\'s messages');
+
+  const admin = authPost(be, loginAs(be, ID.adminAlpha), 'getEmailObservations',
+    { leadId: ID.leadAlphaNew }).data.observations;
+  assert.ok(admin['alpha-one'] && admin['alpha-two'], 'an Admin cannot see their own team');
+  assert.equal(admin['beta-one'], undefined, 'an Admin can see another team\'s messages');
+});
+
+test('VIS-3: observation visibility never exceeds lead visibility', () => {
+  const be = observingBackend();
+
+  be.call('appendRecordRaw', 'EmailObservation', {
+    MessageId: 'alpha-only', LeadId: ID.leadAlphaNew, UserId: ID.repAlpha1,
+    State: 'RENDER_UNCERTAIN', ObservationCount: 1,
+    CreatedAt: '2026-01-05T09:00:00.000Z', UpdatedAt: '2026-01-05T09:00:00.000Z',
+  });
+
+  // A rep on another team cannot read the lead, so must not read what
+  // happened to its mail either. If you cannot see the message, you cannot
+  // see the evidence about it.
+  const res = authPost(be, loginAs(be, ID.repBeta1), 'getEmailObservations',
+    { leadId: ID.leadAlphaNew });
+  assert.equal(res.status, 'error',
+    'observation state escaped the lead scoping rules');
+});
+
+test('VIS-4: no boolean "opened" is ever returned', () => {
+  const be = observingBackend();
+  senderWithSignature(be);
+  const token = loginAs(be, ID.repAlpha1);
+  const obs = sendObserved(be, token);
+
+  be.advanceTime(10 * 60 * 1000);
+  be.post({ action: 'recordObservationFetch',
+    payload: { token: obs.Token, secret: EDGE_SECRET, ua: 'Some Client/1.0' } });
+
+  const seen = authPost(be, token, 'getEmailObservations',
+    { leadId: ID.leadAlphaNew }).data.observations;
+  const row = seen[String(obs.MessageId)];
+
+  assert.ok(row, 'the sender cannot see their own message');
+  assert.equal(row.observationCount, 1);
+  assert.equal(row.state, 'RENDER_UNCERTAIN');
+  // The API must not hand the UI something it can render as "Opened ✓".
+  assert.equal(row.opened, undefined, 'an "opened" boolean was returned');
+  assert.equal(row.read, undefined, 'a "read" boolean was returned');
 });

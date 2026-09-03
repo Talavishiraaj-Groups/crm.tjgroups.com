@@ -66,9 +66,17 @@ test('CONTRACT-3: no action is left unprotected by policy', () => {
       `${action} declares neither public:true nor a roles list`
     );
   }
+  // Two, and only two, endpoints are reachable without a session.
+  //
+  // `login` obviously. `recordObservationFetch` because the caller is the
+  // observation edge relaying a request from a mail client, which has no CRM
+  // session and cannot acquire one — it authenticates with a shared secret
+  // instead, and refuses everything when that secret is unset (see
+  // PUBLIC-1/PUBLIC-2). Anything else appearing here is a hole.
   assert.deepEqual(
-    Object.keys(policy).filter((a) => policy[a].public), ['login'],
-    'login is the only endpoint reachable without a session'
+    Object.keys(policy).filter((a) => policy[a].public).sort(),
+    ['login', 'recordObservationFetch'],
+    'an endpoint became reachable without a session'
   );
 });
 
@@ -347,4 +355,26 @@ test('CONTRACT-14: the UI gates deletion, not editing', () => {
     leadId: ID.leadAlphaNew, reason: 'nope',
   });
   assert.equal(del.code, 'FORBIDDEN', 'deletion escaped the manager check');
+});
+
+test('CONTRACT-15: getUsers carries DisplayName, and the client maps it', () => {
+  const be = buildScenario();
+  be.call('updateRecordRaw', 'Users', ID.repAlpha1, { DisplayName: 'Dolapo Busari' });
+
+  const token = loginAs(be, ID.superAdmin);
+  const rows = authGet(be, token, 'getUsers').data;
+  const row = rows.find((u) => u.ID === ID.repAlpha1);
+
+  assert.equal(String(row.DisplayName), 'Dolapo Busari',
+    'getUsers no longer returns DisplayName');
+
+  // The column existed and was returned for a long time before anything read
+  // it, so notifications and team lists showed "dolapo_busari" where a name
+  // belonged. A missing line in the mapper is silent: it typechecks, renders,
+  // and quietly falls back to the username forever.
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'api', 'services.ts'), 'utf8');
+  const start = src.indexOf('function toUser');
+  const block = src.slice(start, src.indexOf('}', src.indexOf('return {', start)));
+  assert.match(block, /displayName:\s*str\(r\.DisplayName\)/,
+    'the client drops DisplayName, so every screen shows the login handle');
 });
